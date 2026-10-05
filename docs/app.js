@@ -23,7 +23,7 @@
     { k: 'pages', t: '页数', w: 56 },
     { k: 'relevance', t: '相关性', w: 66 },
     { k: 'tags', t: '标签', w: 110 },
-    { k: '_act', t: '操作', w: 108, fixed: true }
+    { k: '_act', t: '操作', w: 140, fixed: true }
   ];
   const CAT_CLASS = {
     '期刊论文': 'c-journal', '硕士学位论文': 'c-master', '博士学位论文': 'c-doctor',
@@ -35,6 +35,11 @@
   let cat = '';           // 当前分类
   let sortKey = 'addedAt', sortDir = -1;
   let editId = null;
+  // 批注：{ [paperId]: [ {id,pid,type,text,quote,anchor,page,at} ] }
+  let annotations = {};
+  // PDF 原文件缓存（仅内存）：导入时保存，刷新后失效；检阅模式需要它
+  const fileCache = new Map();
+  const openReader = id => window.ReaderMode && window.ReaderMode.open(id);
 
   // ---------- 工具 ----------
   const $ = id => document.getElementById(id);
@@ -56,12 +61,12 @@
   // ---------- 存储 ----------
   function save() {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ papers, sel: [...sel] }));
+      localStorage.setItem(KEY, JSON.stringify({ papers, sel: [...sel], annotations }));
     } catch (e) {
       // 摘要是长文本，撑爆配额时先丢摘要再试
       try {
         const lite = papers.map(p => Object.assign({}, p, { abstract: (p.abstract || '').slice(0, 200) }));
-        localStorage.setItem(KEY, JSON.stringify({ papers: lite, sel: [...sel] }));
+        localStorage.setItem(KEY, JSON.stringify({ papers: lite, sel: [...sel], annotations }));
         toast('存储空间不足，已精简摘要后保存');
       } catch (e2) { toast('保存失败：浏览器存储空间不足'); }
     }
@@ -71,6 +76,7 @@
       const d = JSON.parse(localStorage.getItem(KEY) || '{}');
       papers = Array.isArray(d.papers) ? d.papers : [];
       sel = new Set(d.sel || []);
+      annotations = (d.annotations && typeof d.annotations === 'object') ? d.annotations : {};
       // 兼容早期版本：补齐缺失字段，避免后续判重/导出异常
       papers.forEach(p => {
         if (typeof p.fileSize !== 'number') p.fileSize = 0;
@@ -81,7 +87,7 @@
         if (typeof p.keywords !== 'string') p.keywords = '';
         if (typeof p.abstract !== 'string') p.abstract = '';
       });
-    } catch (e) { papers = []; sel = new Set(); }
+    } catch (e) { papers = []; sel = new Set(); annotations = {}; }
   }
 
   // ---------- PDF 解析 ----------
@@ -124,6 +130,9 @@
       if (fp.has(f.name + '|' + f.size)) { skip++; continue; }
       try {
         const buf = await f.arrayBuffer();
+        // 关键：pdf.js 会「转移」并 detach 传入的 ArrayBuffer，
+        // 因此必须在传给它之前先复制一份，供检阅模式重新打开同一文件时使用。
+        const keep = buf.slice(0);
         const doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
         // 前 8 页足够拿到封面、版权页、摘要
         const n = Math.min(doc.numPages, 8);
@@ -148,6 +157,7 @@
         if (k2 !== '|' && fp2.has(k2)) { skip++; continue; }
         r.id = uid();
         r.fileSize = f.size;
+        fileCache.set(r.id, keep);
         r.addedAt = new Date().toISOString();
         r.relevance = '';
         r.tags = '';
@@ -376,15 +386,18 @@
 
       // 操作
       const tdA = el('td');
+      const br = el('button', 'rowbtn', '检阅');
+      br.onclick = () => openReader(p.id);
       const be = el('button', 'rowbtn', '编辑');
       be.onclick = () => openEdit(p.id);
       const bd = el('button', 'rowbtn', '删除');
       bd.onclick = () => {
         if (!confirm('删除《' + (p.title || '无题') + '》？此操作不可撤销。')) return;
         papers = papers.filter(x => x.id !== p.id);
+        delete annotations[p.id];
         sel.delete(p.id); save(); render();
       };
-      tdA.append(be, bd); tr.appendChild(tdA);
+      tdA.append(br, be, bd); tr.appendChild(tdA);
       tb.appendChild(tr);
     });
   }
@@ -531,7 +544,7 @@
     toast('已导出 ' + papers.length + ' 篇');
   }
   function exportBackup() {
-    const data = JSON.stringify({ v: 1, papers, sel: [...sel], at: new Date().toISOString() }, null, 1);
+    const data = JSON.stringify({ v: 2, papers, sel: [...sel], annotations, at: new Date().toISOString() }, null, 1);
     dl(new Blob([data], { type: 'application/json' }), '论文库备份_' + new Date().toISOString().slice(0, 10) + '.json');
     toast('备份已导出');
   }
@@ -632,6 +645,31 @@
     b.onclick = () => $('bakFile').click();
     $('btnDir').parentNode.appendChild(b);
   }
+
+  // ---------- 检阅模式依赖注入 ----------
+  window.ReaderMode.init({
+    getPaper: id => papers.find(x => x.id === id),
+    getAnnotations: id => (annotations[id] || []).slice(),
+    setAnnotations: (id, list) => { annotations[id] = list; save(); },
+    save,
+    toast,
+    getLib: pdfjs,
+    getFileBuffer: async p => {
+      if (fileCache.has(p.id)) return fileCache.get(p.id);
+      // 页面刷新后内存缓存会清空，需要用户重新指认原文件
+      toast('请重新选择这篇 PDF 的原文件（刷新页面后需重新指认）');
+      return new Promise((resolve, reject) => {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'application/pdf,.pdf';
+        inp.onchange = () => {
+          const f = inp.files[0];
+          if (!f) return reject(new Error('未选择文件'));
+          f.arrayBuffer().then(buf => resolve(buf.slice(0)));   // 复制后再交出去，避免被 pdf.js detach
+        };
+        inp.click();
+      });
+    }
+  });
 
   load(); bind(); initImportFlow(); render();
   window.__papers = () => papers;
