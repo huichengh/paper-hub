@@ -71,6 +71,16 @@
       const d = JSON.parse(localStorage.getItem(KEY) || '{}');
       papers = Array.isArray(d.papers) ? d.papers : [];
       sel = new Set(d.sel || []);
+      // 兼容早期版本：补齐缺失字段，避免后续判重/导出异常
+      papers.forEach(p => {
+        if (typeof p.fileSize !== 'number') p.fileSize = 0;
+        if (typeof p.pages !== 'number') p.pages = 0;
+        if (typeof p.relevance !== 'string') p.relevance = '';
+        if (typeof p.tags !== 'string') p.tags = '';
+        if (typeof p.note !== 'string') p.note = '';
+        if (typeof p.keywords !== 'string') p.keywords = '';
+        if (typeof p.abstract !== 'string') p.abstract = '';
+      });
     } catch (e) { papers = []; sel = new Set(); }
   }
 
@@ -86,20 +96,32 @@
     return pdfjsP;
   }
 
-  async function handleFiles(files) {
-    const list = [...files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
-    if (!list.length) { toast('未发现 PDF 文件'); return; }
+  async function handleFiles(files, srcLabel) {
+    const all = [...files];
+    const list = all.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+    const src = srcLabel ? srcLabel + '：' : '';
+    if (!list.length) {
+      toast(src + (all.length
+        ? `这${all.length} 个文件里没有 PDF`
+        : '没有读到任何文件，请重新选择'));
+      return;
+    }
     const prog = $('prog'), bar = prog.querySelector('i');
     prog.style.display = 'block';
-    const existing = new Set(papers.map(p => p.fileName + '|' + (p.fileSize || 0)));
-    let ok = 0, skip = 0, fail = 0;
+    // 判重指纹：文件名+大小 最强；标题+作者 作为备份导入（可能缺 fileSize）时的兜底
+    const fp = new Set(), fp2 = new Set();
+    papers.forEach(p => {
+      fp.add(p.fileName + '|' + (p.fileSize || 0));
+      fp2.add(((p.title || '') + '|' + (p.authors || '')).trim());
+    });
+    let ok = 0, skip = 0, fail = 0, failNames = [];
     const lib = await pdfjs();
 
     for (let i = 0; i < list.length; i++) {
       const f = list[i];
       bar.style.width = Math.round((i) / list.length * 100) + '%';
       setStatus(`解析中 ${i + 1}/${list.length}`, 'busy');
-      if (existing.has(f.name + '|' + f.size)) { skip++; continue; }
+      if (fp.has(f.name + '|' + f.size)) { skip++; continue; }
       try {
         const buf = await f.arrayBuffer();
         const doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
@@ -111,20 +133,31 @@
           const tc = await pg.getTextContent();
           txt += tc.items.map(x => x.str).join('\n') + '\n===PAGE===\n';
         }
+        // 文字层为空的扫描件：能打开但抽不出内容，明确告知而不是当作成功
+        if (txt.replace(/\s|===PAGE===/g, '').length < 50) {
+          failNames.push(f.name + '（无文字层，疑似扫描件）');
+          fail++;
+          continue;
+        }
         let meta = {};
         try { meta = (await doc.getMetadata()).info || {}; } catch (e) { }
         const r = window.PaperParser.parse(
           { title: meta.Title, author: meta.Author, size: f.size }, txt, doc.numPages, f.name);
+        // 标题+作者重复（多见于备份导入后 fileSize 缺失的情况）也算重复
+        const k2 = ((r.title || '') + '|' + (r.authors || '')).trim();
+        if (k2 !== '|' && fp2.has(k2)) { skip++; continue; }
         r.id = uid();
         r.fileSize = f.size;
         r.addedAt = new Date().toISOString();
         r.relevance = '';
         r.tags = '';
         papers.unshift(r);
-        existing.add(f.name + '|' + f.size);
+        fp.add(f.name + '|' + f.size);
+        fp2.add(((r.title || '') + '|' + (r.authors || '')).trim());
         ok++;
       } catch (e) {
         console.warn('解析失败', f.name, e);
+        failNames.push(f.name);
         fail++;
       }
     }
@@ -134,9 +167,12 @@
     save(); render();
     const msg = [];
     if (ok) msg.push(`成功导入 ${ok} 篇`);
-    if (skip) msg.push(`跳过重复 ${skip} 篇`);
-    if (fail) msg.push(`失败 ${fail} 篇（可能是扫描件，需手动录入）`);
-    toast(msg.join('，') || '没有新增文献');
+    if (skip) msg.push(`${skip} 篇已在库中（同名同大小，已自动跳过）`);
+    if (fail) msg.push(`${fail} 篇无法解析`);
+    let text = msg.join('，') || '没有新增文献';
+    if (skip && !ok) text += '。如需重新导入这些文件，请先在列表中删除旧记录';
+    if (failNames.length) text += '：' + failNames.slice(0, 2).join('、') + (failNames.length > 2 ? ' 等' : '');
+    toast(text);
   }
 
   // ---------- 筛选 ----------
@@ -506,10 +542,28 @@
         const d = JSON.parse(fr.result);
         const inc = Array.isArray(d.papers) ? d.papers : [];
         if (!inc.length) { toast('备份里没有文献'); return; }
-        let n = 0;
-        inc.forEach(p => { p.id = uid(); papers.push(p); n++; });
+        let n = 0, dup = 0;
+        // 与现有文献比对，避免备份与库中内容重复叠加
+        const seen = new Set(papers.map(p =>
+          ((p.title || '') + '|' + (p.authors || '')).trim()));
+        inc.forEach(p => {
+          const key = ((p.title || '') + '|' + (p.authors || '')).trim();
+          if (key !== '|' && seen.has(key)) { dup++; return; }
+          p.id = uid();
+          // 补齐可能缺失的字段，保证后续判重与导出正常
+          p.fileSize = p.fileSize || 0;
+          p.pages = p.pages || 0;
+          p.tags = p.tags || '';
+          p.relevance = p.relevance || '';
+          p.note = p.note || '';
+          p.addedAt = p.addedAt || new Date().toISOString();
+          seen.add(key);
+          papers.push(p);
+          n++;
+        });
         save(); render();
-        toast('已导入 ' + n + ' 篇');
+        toast(n ? `已导入 ${n} 篇` + (dup ? `，跳过重复 ${dup} 篇` : '')
+                 : `备份中的 ${dup} 篇都已存在于库中`);
       } catch (e) { toast('备份文件解析失败'); }
     };
     fr.readAsText(file);
@@ -518,9 +572,16 @@
   // ---------- 事件 ----------
   function bind() {
     $('drop').onclick = () => $('file').click();
-    $('btnDir').onclick = () => $('dir').click();
     $('file').onchange = e => { if (e.target.files.length) handleFiles(e.target.files); e.target.value = ''; };
-    $('dir').onchange = e => { if (e.target.files.length) handleFiles(e.target.files); e.target.value = ''; };
+    $('dir').onchange = e => { handleFiles(e.target.files, '文件夹'); e.target.value = ''; };
+    // 目录选择：webkitdirectory 在部分浏览器不支持，用能力检测决定走哪条路
+    $('btnDir').onclick = () => {
+      if ('webkitdirectory' in document.createElement('input')) {
+        $('dir').click();
+      } else {
+        toast('当前浏览器不支持选择文件夹，请改用「点击或拖入 PDF」批量选择');
+      }
+    };
     ['dragenter', 'dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
     ['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
     $('drop').addEventListener('drop', e => { if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
