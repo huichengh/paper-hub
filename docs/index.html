@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-size='19' text-anchor='middle' fill='white' font-family='sans-serif'%3E论%3C/text%3E%3C/svg%3E">
+<title>论文汇总与对比平台</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --line:#e3e6ea; --line2:#eef0f3;
+    --txt:#1b1f24; --txt2:#5b6470; --txt3:#8b95a1;
+    --acc:#2563eb; --acc-soft:#eaf1fe;
+    --warn:#b45309; --warn-soft:#fef3e2;
+    --ok:#15803d; --ok-soft:#e8f5ec;
+    --danger:#b91c1c; --danger-soft:#fdecec;
+    --radius:8px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    background:var(--bg); color:var(--txt); font-size:13px; line-height:1.6;
+  }
+  button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+  button{cursor:pointer;border:none;background:none}
+  a{color:var(--acc);text-decoration:none}
+
+  /* ---------- 顶栏 ---------- */
+  header{
+    background:var(--panel); border-bottom:1px solid var(--line);
+    padding:10px 18px; display:flex; align-items:center; gap:14px;
+    position:sticky; top:0; z-index:50; flex-wrap:wrap;
+  }
+  .logo{font-size:15px;font-weight:700;white-space:nowrap}
+  .logo span{color:var(--txt3);font-weight:400;font-size:12px;margin-left:6px}
+  .spacer{flex:1}
+  .btn{
+    padding:6px 13px; border:1px solid var(--line); border-radius:6px;
+    background:var(--panel); color:var(--txt2); white-space:nowrap;
+  }
+  .btn:hover{border-color:var(--acc); color:var(--acc); background:var(--acc-soft)}
+  .btn.primary{background:var(--acc); border-color:var(--acc); color:#fff}
+  .btn.primary:hover{background:#1d4ed8; color:#fff}
+  .btn.sm{padding:3px 9px;font-size:12px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.danger:hover{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
+
+  /* ---------- 布局 ---------- */
+  .wrap{display:flex; min-height:calc(100vh - 46px); align-items:flex-start}
+  aside{
+    width:250px; flex-shrink:0; background:var(--panel);
+    border-right:1px solid var(--line); padding:14px;
+    position:sticky; top:46px; max-height:calc(100vh - 46px); overflow-y:auto;
+  }
+  main{flex:1; padding:14px 18px 60px; min-width:0}
+
+  .side-sec{margin-bottom:18px}
+  .side-h{
+    font-size:11px; font-weight:700; color:var(--txt3); letter-spacing:.5px;
+    margin-bottom:8px; display:flex; align-items:center; justify-content:space-between;
+  }
+  .cat-item{
+    display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px;
+    cursor:pointer; color:var(--txt2);
+  }
+  .cat-item:hover{background:var(--line2)}
+  .cat-item.on{background:var(--acc-soft); color:var(--acc); font-weight:600}
+  .cat-item .n{margin-left:auto; font-size:11px; color:var(--txt3); font-variant-numeric:tabular-nums}
+  .cat-item.on .n{color:var(--acc)}
+  .drop{
+    border:1.5px dashed var(--line); border-radius:var(--radius);
+    padding:16px 12px; text-align:center; color:var(--txt3); cursor:pointer;
+    background:#fbfcfd;
+  }
+  .drop:hover,.drop.over{border-color:var(--acc); background:var(--acc-soft); color:var(--acc)}
+  .drop b{display:block; color:var(--acc); font-size:13px; margin-bottom:3px}
+  .drop small{font-size:11px; line-height:1.5; display:block}
+
+  /* ---------- 筛选栏 ---------- */
+  .filters{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:11px 13px; margin-bottom:12px;
+  }
+  .frow{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+  .frow+.frow{margin-top:8px; padding-top:8px; border-top:1px dashed var(--line2)}
+  input[type=text],input[type=number],select,textarea{
+    border:1px solid var(--line); border-radius:6px; padding:5px 9px; background:#fff;
+    outline:none; min-width:0;
+  }
+  input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{
+    border-color:var(--acc); box-shadow:0 0 0 3px rgba(37,99,235,.1);
+  }
+  .f-item{display:flex; align-items:center; gap:5px}
+  .f-item>label{font-size:12px; color:var(--txt3); white-space:nowrap}
+  #q{width:260px}
+  #fAuthor{width:130px} #fSource{width:170px} #fMajor{width:120px}
+  #fYearMin,#fYearMax{width:66px}
+  .chip{
+    display:inline-flex; align-items:center; gap:5px; padding:3px 9px;
+    background:var(--acc-soft); color:var(--acc); border-radius:12px; font-size:12px;
+  }
+  .chip b{font-weight:600}
+  .chip button{color:var(--acc); opacity:.65; font-size:14px; line-height:1}
+  .chip button:hover{opacity:1}
+
+  /* ---------- 工具条 ---------- */
+  .toolbar{
+    display:flex; align-items:center; gap:9px; margin-bottom:10px; flex-wrap:wrap;
+  }
+  .count{color:var(--txt2)}
+  .count b{color:var(--txt)}
+  .status{font-size:12px; padding:2px 8px; border-radius:4px; background:var(--line2); color:var(--txt2)}
+  .status.busy{background:var(--warn-soft); color:var(--warn)}
+  .status.err{background:var(--danger-soft); color:var(--danger)}
+
+  /* ---------- 表格 ---------- */
+  .tablebox{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); overflow:auto; max-height:calc(100vh - 230px)}
+  table{border-collapse:separate; border-spacing:0; width:100%; font-size:12.5px}
+  th,td{padding:8px 10px; text-align:left; border-bottom:1px solid var(--line2); vertical-align:top}
+  thead th{
+    position:sticky; top:0; z-index:5; background:#f9fafb; color:var(--txt2);
+    font-weight:600; font-size:12px; white-space:nowrap; border-bottom:1px solid var(--line);
+  }
+  thead th.sortable{cursor:pointer; user-select:none}
+  thead th.sortable:hover{color:var(--acc)}
+  thead th .ar{color:var(--acc); font-size:10px; margin-left:2px}
+  tbody tr:hover{background:#fafbfc}
+  tbody tr.sel{background:var(--acc-soft)}
+  td.cb,th.cb{width:34px; text-align:center; padding-left:12px; position:sticky; left:0; z-index:3; background:var(--panel)}
+  thead td.cb,th.cb{background:#f9fafb; z-index:6}
+  tbody tr:hover td.cb{background:#fafbfc}
+  tbody tr.sel td.cb{background:var(--acc-soft)}
+  td.cb input{width:14px;height:14px;cursor:pointer;vertical-align:middle}
+  .t-title{font-weight:600; color:var(--txt); min-width:210px; max-width:330px}
+  .t-wrap{max-width:330px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden}
+  .t-sub{color:var(--txt3); font-size:11px; font-weight:400; margin-top:2px}
+  .badge{display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; white-space:nowrap; background:var(--line2); color:var(--txt2)}
+  .badge.c-journal{background:#e7f0fd;color:#1d4ed8}
+  .badge.c-master{background:#e9f6ee;color:#15803d}
+  .badge.c-doctor{background:#f3e8fd;color:#6b21a8}
+  .badge.c-conf{background:#fdf0e3;color:#b45309}
+  .badge.c-report{background:#e8f4f8;color:#0e7490}
+  .badge.r-高{background:#fdecec;color:#b91c1c}
+  .badge.r-中{background:var(--warn-soft);color:var(--warn)}
+  .badge.r-低{background:var(--ok-soft);color:var(--ok)}
+  .rowbtn{color:var(--txt3); padding:2px 5px; border-radius:4px; white-space:nowrap}
+  .rowbtn:hover{background:var(--acc-soft); color:var(--acc)}
+  .empty{padding:60px 20px; text-align:center; color:var(--txt3)}
+  .empty b{display:block; color:var(--txt2); font-size:14px; margin-bottom:5px}
+
+  /* ---------- 对比抽屉 ---------- */
+  .mask{position:fixed; inset:0; background:rgba(15,20,28,.42); z-index:90; display:none}
+  .mask.on{display:block}
+  .drawer{
+    position:fixed; top:0; right:0; bottom:0; width:min(1180px,94vw);
+    background:var(--bg); z-index:100; display:none; flex-direction:column;
+    box-shadow:-6px 0 26px rgba(0,0,0,.14);
+  }
+  .drawer.on{display:flex}
+  .dhead{
+    background:var(--panel); border-bottom:1px solid var(--line); padding:11px 16px;
+    display:flex; align-items:center; gap:11px; flex-wrap:wrap;
+  }
+  .dhead h3{font-size:14px}
+  .dbody{flex:1; overflow:auto; padding:14px 16px 30px}
+  .cmp{border-collapse:separate; border-spacing:0; background:var(--panel); border-radius:var(--radius); overflow:hidden; width:100%}
+  .cmp th,.cmp td{border-bottom:1px solid var(--line2); border-right:1px solid var(--line2); padding:9px 11px; font-size:12.5px; vertical-align:top}
+  .cmp thead th{background:#f9fafb; position:sticky; top:0; z-index:4; font-size:12.5px; text-align:left; min-width:200px}
+  .cmp tbody th{
+    background:#f9fafb; color:var(--txt2); font-weight:600; font-size:12px;
+    width:132px; min-width:132px; position:sticky; left:0; z-index:3; white-space:nowrap;
+  }
+  .cmp thead th:first-child{left:0; z-index:5; width:132px; min-width:132px}
+  .cmp td{background:var(--panel); min-width:200px}
+  .cmp tr:hover td{background:#fafbfc}
+  .same{background:var(--ok-soft) !important}
+  .diff{background:#fffaf0 !important}
+  .dtitle{font-weight:700; color:var(--txt); margin-bottom:3px; line-height:1.45}
+  .dmeta{color:var(--txt3); font-size:11px; font-weight:400}
+
+  /* ---------- 弹窗 ---------- */
+  .modal{position:fixed; inset:0; z-index:120; display:none; align-items:center; justify-content:center; padding:24px}
+  .modal.on{display:flex}
+  .mbox{background:var(--panel); border-radius:10px; width:min(880px,96vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 12px 42px rgba(0,0,0,.2)}
+  .mhead{padding:13px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px}
+  .mhead h3{font-size:14px; flex:1}
+  .mbody{padding:16px 18px; overflow:auto; flex:1}
+  .mfoot{padding:11px 18px; border-top:1px solid var(--line); display:flex; gap:8px; justify-content:flex-end; background:#fafbfc; border-radius:0 0 10px 10px}
+  .fgrid{display:grid; grid-template-columns:repeat(2,1fr); gap:11px 15px}
+  .fld{display:flex; flex-direction:column; gap:4px}
+  .fld.full{grid-column:1/-1}
+  .fld label{font-size:11.5px; color:var(--txt2); font-weight:600}
+  .fld input,.fld select,.fld textarea{width:100%}
+  .fld textarea{resize:vertical; min-height:70px; line-height:1.6}
+  .hint{font-size:11px; color:var(--txt3); margin-top:2px}
+  .x{width:26px;height:26px;border-radius:5px;color:var(--txt3);font-size:17px;line-height:1}
+  .x:hover{background:var(--line2); color:var(--txt)}
+  .toast{
+    position:fixed; top:60px; left:50%; transform:translateX(-50%);
+    background:#1b1f24; color:#fff; padding:9px 18px; border-radius:6px; z-index:200;
+    font-size:12.5px; opacity:0; pointer-events:none; transition:opacity .22s;
+    box-shadow:0 4px 16px rgba(0,0,0,.24); max-width:80vw;
+  }
+  .toast.on{opacity:1}
+  .prog{height:3px; background:var(--line2); border-radius:2px; overflow:hidden; margin-top:9px}
+  .prog i{display:block; height:100%; background:var(--acc); width:0; transition:width .2s}
+  .tip{font-size:11.5px;color:var(--txt3);line-height:1.7}
+  .tip code{background:var(--line2); padding:1px 4px; border-radius:3px; font-size:11px}
+  @media(max-width:900px){
+    aside{display:none} .fgrid{grid-template-columns:1fr} #q{width:100%}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">论文汇总与对比平台<span>PDF 自动解析 · 分类 · 筛选 · 并排对比</span></div>
+  <div class="spacer"></div>
+  <span id="status" class="status"></span>
+  <button class="btn" id="btnImport">导入备份</button>
+  <button class="btn" id="btnExport">导出 Excel</button>
+  <button class="btn primary" id="btnCompare">对比 (0)</button>
+</header>
+
+<div class="wrap">
+  <!-- 侧栏 -->
+  <aside>
+    <div class="side-sec">
+      <div class="side-h">上传 PDF</div>
+      <div class="drop" id="drop">
+        <b>点击或拖入 PDF</b>
+        <small>支持批量选择、整个文件夹拖入<br>文献库只存在你自己的浏览器里</small>
+      </div>
+      <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
+      <input type="file" id="dir" webkitdirectory multiple hidden>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button class="btn sm" id="btnDir" style="flex:1">选择文件夹</button>
+        <button class="btn sm danger" id="btnClear" style="flex:1">清空文献库</button>
+      </div>
+      <div class="prog" id="prog" style="display:none"><i></i></div>
+    </div>
+
+    <div class="side-sec">
+      <div class="side-h">文献分类 <span id="catTotal" style="font-weight:400"></span></div>
+      <div id="cats"></div>
+    </div>
+
+    <div class="side-sec">
+      <div class="side-h">相关度分布</div>
+      <div id="relStats"></div>
+    </div>
+
+    <div class="side-sec">
+      <div class="side-h">使用说明</div>
+      <div class="tip">
+        解析字段取自 PDF 封面与版权页，<b>全部可点开修改</b>。<br>
+        勾选左侧复选框即可加入对比，对比表里<b>绿色</b>表示各篇一致，<b>黄色</b>表示有差异。<br>
+        数据存在浏览器本地，关掉页面不会丢；换电脑用「导出/导入备份」迁移。
+      </div>
+    </div>
+  </aside>
+
+  <!-- 主区 -->
+  <main>
+    <div class="filters">
+      <div class="frow">
+        <div class="f-item"><label>关键词</label><input type="text" id="q" placeholder="题目 / 作者 / 摘要 / 关键词…"></div>
+        <div class="f-item"><label>作者</label><input type="text" id="fAuthor" list="dlAuthor" placeholder="精确匹配"><datalist id="dlAuthor"></datalist></div>
+        <div class="f-item"><label>期刊/学校</label><input type="text" id="fSource" list="dlSource" placeholder="包含匹配"><datalist id="dlSource"></datalist></div>
+        <div class="f-item"><label>专业</label><input type="text" id="fMajor" list="dlMajor" placeholder="包含"><datalist id="dlMajor"></datalist></div>
+        <div class="f-item"><label>导师</label><input type="text" id="fSup" list="dlSup" placeholder="包含"><datalist id="dlSup"></datalist></div>
+      </div>
+      <div class="frow">
+        <div class="f-item"><label>年份</label>
+          <input type="number" id="fYearMin" placeholder="起" min="1980" max="2100">
+          <span style="color:var(--txt3)">—</span>
+          <input type="number" id="fYearMax" placeholder="止" min="1980" max="2100">
+        </div>
+        <div class="f-item"><label>相关度</label>
+          <select id="fRel"><option value="">全部</option><option>高</option><option>中</option><option>低</option></select>
+        </div>
+        <div class="f-item"><label>页数</label>
+          <input type="number" id="fPagesMin" placeholder="≥" style="width:62px">
+          <span style="color:var(--txt3)">—</span>
+          <input type="number" id="fPagesMax" placeholder="≤" style="width:62px">
+        </div>
+        <div class="f-item"><label>标签</label><input type="text" id="fTag" list="dlTag" placeholder="包含"><datalist id="dlTag"></datalist></div>
+        <button class="btn sm" id="btnReset">重置筛选</button>
+        <div class="spacer"></div>
+        <div id="chips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <span class="count">共 <b id="cAll">0</b> 篇，当前显示 <b id="cShow">0</b> 篇</span>
+      <span style="color:var(--txt3)">|</span>
+      <span class="count">已勾选 <b id="cSel">0</b> 篇</span>
+      <div class="spacer"></div>
+      <button class="btn sm" id="btnSelAll">全选当前</button>
+      <button class="btn sm" id="btnSelNone">清空勾选</button>
+    </div>
+
+    <div class="tablebox">
+      <table id="tbl">
+        <thead><tr id="thr"></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div id="empty" class="empty" style="display:none">
+        <b>还没有文献</b>
+        左侧上传 PDF 开始，或点「导入备份」恢复已有数据
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 对比抽屉 -->
+<div class="mask" id="mask"></div>
+<div class="drawer" id="drawer">
+  <div class="dhead">
+    <h3>论文对比</h3>
+    <span class="count" id="cmpCount"></span>
+    <div class="spacer"></div>
+    <button class="btn sm" id="btnCmpXlsx">导出对比表</button>
+    <button class="btn sm" id="btnCmpCsv">导出 CSV</button>
+    <button class="btn" id="btnCloseDrawer">关闭</button>
+  </div>
+  <div class="dbody"><div id="cmpWrap"></div></div>
+</div>
+
+<!-- 编辑弹窗 -->
+<div class="modal" id="modal">
+  <div class="mbox">
+    <div class="mhead"><h3 id="mTitle">编辑文献</h3><button class="x" id="btnMX">×</button></div>
+    <div class="mbody">
+      <div class="fgrid" id="mGrid"></div>
+    </div>
+    <div class="mfoot">
+      <button class="btn" id="btnMCancel">取消</button>
+      <button class="btn primary" id="btnMSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="bakFile" accept=".json" hidden>
+<div class="toast" id="toast"></div>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="parser.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
