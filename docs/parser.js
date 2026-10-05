@@ -15,10 +15,16 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
 
   // ================= 文本归一化 =================
+  // PDF 字体缺少字形映射时，文本层会混入 Unicode 私有区乱码（如 U+E5CE），
+  // 它们既不属于任何标签也不属于正文，必须在归一化阶段剥离，
+  // 否则「值」会越过这些符号继续吞下去（表现为"工程管理 "后面挂着乱码尾巴）。
+  const PRIVATE_USE = /[\uE000-\uF8FF\u200B-\u200F\uFEFF\u2060-\u206F]/g;
+
   function fw(s) {
     return String(s == null ? '' : s)
       .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-      .replace(/[Ａ-Ｚａ-ｚ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+      .replace(/[Ａ-Ｚａ-ｚ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      .replace(PRIVATE_USE, '');
   }
   // 保结构：压数字间空格与行内汉字间空格，保留换行
   function squeeze(s) {
@@ -68,19 +74,61 @@
   const STOP_HEAD = /^(摘要|abstract|关键词|key\s*words?|引言|绪论|前言|目录|参考文献|致谢|攻读|第[一二三四五六七八九十0-9]+章|第[0-9]+\s*章|中图分类号|文献标识码|作者简介|基金项目|学位论文|专业学位|上传|扫码)/i;
 
   // 标签结束边界：抓到值后在此截断，避免吞进下一个字段
-  const LABEL_END = /(?:作\s*者\s*姓\s*名|作\s*者\s*单\s*位?|学\s*科\s*专\s*业\s*名\s*称|专\s*业\s*名\s*称|专\s*业\s*领\s*域|专\s*业\s*学\s*位\s*领\s*域|管\s*理\s*领\s*域|研\s*究\s*方\s*向|研\s*究\s*领\s*域|指\s*导\s*教\s*师\s*姓\s*名|论\s*文\s*指\s*导\s*教\s*师|指\s*导\s*教\s*师|企\s*业\s*指\s*导\s*教\s*师|企\s*业\s*导\s*师|实\s*践\s*导\s*师|校\s*外\s*导\s*师|所\s*在\s*学\s*院|学\s*位\s*授\s*予\s*单\s*位|授\s*予\s*学\s*位\s*单\s*位|论\s*文\s*提\s*交\s*日\s*期|论\s*文\s*答\s*辩\s*日\s*期|答\s*辩\s*日\s*期|答\s*辩\s*委\s*员\s*会|学\s*习\s*方\s*式|研\s*究\s*方\s*向|中\s*文\s*摘\s*要|英\s*文\s*摘\s*要|学\s*科\s*专\s*业\s*类\s*别|申\s*请\s*学\s*位|学\s*位\s*授\s*予\s*日\s*期|完\s*成\s*日\s*期|中\s*图\s*分\s*类\s*号|文\s*献\s*标\s*识\s*码|学\s*号|学\s*校\s*代\s*号|分\s*类\s*号|关\s*键\s*词|key\s*words?|abstract|DOI|基\s*金\s*项\s*目)/i;
+  // 字段结束边界：抓「标签:值」时，值取到下一个标签为止。
+  // 用数组 + 按长度降序匹配，避免「指导教师」先于「指导教师姓名」命中导致值被提前截断。
+  const LABEL_TERMS = [
+    '学科专业名称', '专业学位领域', '学位专业领域', '企业指导教师', '论文指导教师', '指导教师姓名',
+    '专业名称', '专业领域', '管理领域', '研究方向', '研究领域', '专业类别',
+    '学位授予单位', '授予学位单位', '所在学院', '学院名称', '学校代号', '单位名称', '培养单位',
+    '作者姓名', '作者单位', '论文提交日期', '论文答辩日期', '学位授予日期', '完成日期',
+    '申请学位级别', '申请学位', '答辩委员会', '答辩日期', '中图分类号', '文献标识码',
+    '学习方式', '中文摘要', '英文摘要', '关 键 词', '关键词', '基金项目',
+    '指导教师', '企业导师', '实践导师', '校外导师', '导师姓名', '导师',
+    '作者', '学科专业', '专业', '学号', '分类号', '性别', '年龄', '籍贯', '职称', '姓名',
+    '研究方向', 'DOI', 'Abstract', 'abstract', 'Key words', 'Keywords'
+  ];
+  const LABEL_SORTED = LABEL_TERMS.slice().sort((a, b) => b.length - a.length);
+  // 统一转正则：字间允许空白（「关 键 词」）
+  function toLabelRe(t) {
+    return new RegExp(t.split('').map(ch => ch === ' ' ? '\\s+' : ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(''), 'i');
+  }
+  const LABEL_END_RES = LABEL_SORTED.map(toLabelRe);
+  const LABEL_END = LABEL_END_RES.length
+    ? new RegExp('(?:' + LABEL_SORTED.map(t => t.split('').map(ch => ch === ' ' ? '\\s+' : ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('')).join('|') + ')', 'i')
+    : /$^/;
+
+  // 「结构性标签」：出现这些标签才说明一个字段真正结束。
+  // 用于同标签下有多人/多值的场景（如"苏卫国副教授 李瑞楷高级工程师"），
+  // 此时不能遇到任何标签就截断，否则会把同属一个字段的人拆散。
+  const STRUCT_END = new RegExp(
+    '(?:' + ['学\s*位\s*授\s*予\s*单\s*位', '授\s*予\s*学\s*位\s*单\s*位', '所\s*在\s*学\s*院',
+      '论\s*文\s*提\s*交\s*日\s*期', '论\s*文\s*答\s*辩\s*日\s*期', '答\s*辩\s*委\s*员\s*会',
+      '答\s*辩\s*日\s*期', '完\s*成\s*日\s*期', '中\s*图\s*分\s*类\s*号', '文\s*献\s*标\s*识\s*码',
+      '学\s*号', '学\s*校\s*代\s*号', '分\s*类\s*号', '关\s*键\s*词', 'Key\s*words?',
+      'abstract', 'DOI', '基\s*金\s*项\s*目', '中\s*文\s*摘\s*要', '英\s*文\s*摘\s*要',
+      '企\s*业\s*导\s*师', '实\s*践\s*导\s*师', '校\s*外\s*导\s*师', '作\s*者\s*姓\s*名',
+      '学\s*科\s*专\s*业', '专\s*业\s*名\s*称', '研\s*究\s*方\s*向', '参\s*考\s*文\s*献',
+      '致\s*谢', '附\s*录', '攻读', '一\s*[绪引]\s*[论语]', '第\s*[一二三四五六七八九十0-9]+\s*章',
+      '学\s*位\s*授\s*予\s*日\s*期', '申\s*请\s*学\s*位', '学\s*习\s*方\s*式'
+    ].map(t => t).join('|') + ')', 'i');
 
   /** 抓「标签:值」，值截到下一个标签；labelRes 为别名数组，逐个尝试 */
-  function fieldVal(text, labelRes) {
+  function fieldVal(text, labelRes, wide) {
     for (const re of labelRes) {
       const m = text.match(re);
       if (!m) continue;
       const after = text.slice(m.index + m[0].length);
-      const stop = after.search(LABEL_END);
+      // wide 模式：只在遇到"结构性标签"时才截断，能保住同字段的多人值
+      const stop = after.search(wide ? STRUCT_END : LABEL_END);
       let v = (stop >= 0 ? after.slice(0, stop) : after).replace(/^[\s:：,，;；]+/, '');
       if (v.trim()) return v.trim();
     }
     return '';
+  }
+
+  // 在给定位置之后找最近的边界标签（用于切分多个并列值，如两位导师）
+  function nextLabelPos(text) {
+    return text.search(LABEL_END);
   }
 
   // ================= 主入口 =================
@@ -113,7 +161,8 @@
     r.school = org.school; r.source = org.source;
     r.major = pickMajor(H, pageFlat);
     const sup = pickSupervisor(H, pageFlat);
-    r.supervisor = sup.main; r.coSupervisor = sup.co;
+    r.supervisor = sup.all && sup.all.length ? sup.all.join('; ') : sup.main;
+    r.coSupervisor = sup.co || (sup.all && sup.all[1] || '');
     r.keywords = pickKeywords(H, W);
     r.abstract = pickAbstract(pages);
 
@@ -147,6 +196,13 @@
       const m = H.match(/(?:学位论文|硕士论文|博士论文)?([一-龥0-9A-Za-z]{10,60}?(?:研究|分析|设计|评价|评估|管理|应用|优化|构建|探究|实证|影响|对策|机制|路径|策略|体系))/);
       if (m) cands.push({ t: m[1], s: 60 });
     }
+    // 优先用「论文题目：」标签后的完整值 —— 不少论文有副标题（"……研究 --- 以某项目为例"），
+    // 只靠文件名会丢掉
+    const labelT = fieldVal(H, [/论\s*文\s*题\s*目\s*[:：]?/, /题\s*目\s*[:：]?/]);
+    if (labelT && labelT.length >= 8 && labelT.length <= 90) {
+      const t = cleanTitle(labelT);
+      if (t && !/^(论文题目|题目)$/.test(t)) return t;
+    }
     const seg = F.replace(/\.pdf$/i, '').split('_');
     if (seg.length >= 2 && seg[0].trim().length >= 8) cands.push({ t: seg[0].trim(), s: 78 });
     if (!cands.length) return cleanTitle(F.replace(/\.pdf$/i, '')) || '未识别题目';
@@ -154,7 +210,11 @@
     return cleanTitle(cands[0].t);
   }
   function cleanTitle(t) {
-    return flatten(t).replace(/^[\s　:：]+|[\s　:：]+$/g, '').slice(0, 120);
+    let v = flatten(t).replace(/^[\s　:：]+|[\s　:：]+$/g, '');
+    // 统一副标题分隔符："研究 --- 以某为例" -> "研究——以某为例"
+    v = v.replace(/\s*[-–—]{2,}\s*/g, '——').replace(/——+/g, '——');
+    // 去掉题目里混入的英文排版残留（部分学校中英混排，如"电力工程项目质量管理研究---以某并网二次工程项目为例 Study on..."）
+    return v.slice(0, 120).trim();
   }
 
   // ================= 作者 =================
@@ -258,11 +318,22 @@
   }
 
   // ================= 专业 =================
+  // 专业字段的标签有优先级之分：
+  //   「专业学位类别(领域)」= 学位类别（学术规范意义上的"专业"）
+  //   「管理领域（方向）」/「研究方向」= 研究方向，粒度更细，不应作为"专业"
+  // 顺序即优先级：先找学位类别，最后才退到研究方向。
   const MAJOR_LABELS = [
-    /学\s*科\s*专\s*业\s*(?:名\s*称)?\s*[:：]?/, /专\s*业\s*名\s*称\s*[:：]?/,
-    /专\s*业\s*领\s*域\s*[:：]?/, /专\s*业\s*学\s*位\s*领\s*域\s*[:：]?/,
-    /学\s*位\s*专\s*业\s*领\s*域\s*[:：]?/, /管\s*理\s*领\s*域\s*[（(]?\s*方\s*向\s*[)）]?\s*[:：]?/,
-    /研\s*究\s*领\s*域\s*[:：]?/, /研\s*究\s*方\s*向\s*[:：]?/, /专\s*业\s*类\s*别\s*[:：]?/
+    /学\s*科\s*专\s*业\s*(?:名\s*称)?\s*[:：]?/,
+    /专\s*业\s*学\s*位\s*类\s*别\s*[（(]?\s*领\s*域\s*[)）]?\s*[:：]?/,
+    /专\s*业\s*学\s*位\s*领\s*域\s*[:：]?/,
+    /专\s*业\s*名\s*称\s*[:：]?/,
+    /专\s*业\s*领\s*域\s*[:：]?/,
+    /学\s*位\s*专\s*业\s*领\s*域\s*[:：]?/,
+    /专\s*业\s*类\s*别\s*[:：]?/,
+    // 以下为研究方向，兜底用
+    /管\s*理\s*领\s*域\s*[（(]?\s*方\s*向\s*[)）]?\s*[:：]?/,
+    /研\s*究\s*领\s*域\s*[:：]?/,
+    /研\s*究\s*方\s*向\s*[:：]?/
   ];
   function pickMajor(H, pageFlat) {
     // 「不区分研究方向」「研究方向」等噪声前缀先剥掉
@@ -322,13 +393,75 @@
     return out;
   }
   function pickSupervisor(H, pageFlat) {
-    const one = txt => ({
-      main: cleanSup(fieldVal(txt, SUP_LABELS)),
-      co: cleanSup(fieldVal(txt, CO_SUP_LABELS))
+    // 关键：不走 fieldVal 的边界截断（会在第二个标签处停下，丢掉同标签下的多位导师），
+    // 而是从「指导教师」标签位置开始，直接扫描后续所有「中文姓名 + 职称」的组合。
+    const NAME = '\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF';
+    const labels = SUP_LABELS.concat(CO_SUP_LABELS);
+    const stopRe = new RegExp('(?:所\\s*在\\s*学\\s*院|论\\s*文\\s*提\\s*交|论\\s*文\\s*答\\s*辩|答\\s*辩\\s*委\\s*员|答\\s*辩\\s*日\\s*期|完\\s*成\\s*日\\s*期|中\\s*图\\s*分\\s*类\\s*号|文\\s*献\\s*标\\s*识\\s*码|学\\s*号|分\\s*类\\s*号|关\\s*键\\s*词|abstract|DOI|基\\s*金\\s*项\\s*目|参\\s*考\\s*文\\s*献|致\\s*谢|附\\s*录|攻\\s*读|作\\s*者\\s*姓\\s*名|学\\s*科\\s*专\\s*业|专\\s*业\\s*名\\s*称|研\\s*究\\s*方\\s*向)', 'i');
+
+    const scan = txt => {
+      const best = [];
+      for (const re of labels) {
+        const m = txt.match(re);
+        if (!m) continue;
+        const from = m.index + m[0].length;
+        // 窗口要够小：只覆盖紧跟标签的姓名区，避免扫到正文里的人名
+        const rest = txt.slice(from, from + 40);
+        const stop = rest.search(stopRe);
+        const scope = (stop >= 0 ? rest.slice(0, stop) : rest).trim();
+        if (!scope) continue;
+        // 姓名非贪婪 {2,4}?，否则「苏卫国副教授」会把「副」吃进姓名里。
+        // 每次新建正则，避免 /g 的 lastIndex 跨次调用残留。
+        const pairRe = new RegExp('([' + NAME + ']{2,4}?)\\s*(?:' + TITLE_WORDS + ')', 'g');
+        const names = [];
+        let mm;
+        while ((mm = pairRe.exec(scope)) !== null) {
+          const n = mm[1];
+          if (!n || SUP_STOP.test(n)) continue;
+          if (names.indexOf(n) < 0) names.push(n);
+          if (names.length >= 2) break;
+        }
+        // 没有职称的情况：标签后紧跟 2-4 字中文姓名（如「指导教师：汤齐」）
+        if (!names.length) {
+          const plain = scope.match(new RegExp('^([' + NAME + ']{2,4})(?=\\s|$)'));
+          if (plain && !SUP_STOP.test(plain[1])) names.push(plain[1]);
+        }
+        if (names.length > best.length) {
+          best.length = 0;
+          names.forEach(n => best.push(n));
+        }
+        if (best.length >= 2) break;   // 已找到多位，无需再试其他标签
+      }
+      return best;
+    };
+
+    let names = scan(H);
+    if (!names.length) for (const p of pageFlat) { names = scan(p); if (names.length) break; }
+    return { main: names[0] || '', co: names[1] || '', all: names };
+  }
+
+
+  // 把 "苏卫国副教授 李瑞楷高级工程师" 拆成 ['苏卫国','李瑞楷']
+  // 依据职称词切分；若无职称则按 2-4 字中文连续块切
+  // 注意：交替匹配的顺序即优先级，长词必须在前（「副教授」要先于「教授」，否则「副」会被切出）
+  const TITLE_WORDS = '博士生导师|硕士生导师|助理研究员|副研究员|高级工程师|高级经济师|副教授|教授|研究员|讲师|工程师';
+  function splitSupervisors(raw) {
+    if (!raw) return [];
+    let v = flatten(raw);
+    // 先把职称词替换成分隔符，保留姓名
+    v = v.replace(new RegExp('\\s*(' + TITLE_WORDS + ')\\s*', 'g'), '|');
+    // 去掉空片段与标点
+    const parts = v.split('|').map(x => x.trim()).filter(Boolean);
+    const out = [];
+    parts.forEach(p => {
+      const cleaned = cleanSup(p);
+      // 过滤明显是后续标签残留的片段
+      if (cleaned && !/^(所在学院|论文提交|学科专业|专业名称|研究方向|申请学位|答辩)/.test(cleaned)) {
+        out.push(cleaned);
+      }
+      if (out.length >= 2) return;
     });
-    let r = one(H);
-    if (!r.main) for (const p of pageFlat) { r = one(p); if (r.main) break; }
-    return r;
+    return out;
   }
 
   // ================= 关键词 =================
