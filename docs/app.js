@@ -3,28 +3,13 @@
   'use strict';
 
   const KEY = 'paperhub.v1';
-  const PAGE_FIELDS = [
-    ['title', '题目'], ['authors', '作者'], ['year', '年代'], ['type', '期刊/论文类型'],
-    ['source', '期刊/学校'], ['school', '学位授予单位'], ['major', '学科专业'],
-    ['supervisor', '导师'], ['keywords', '关键词'], ['abstract', '摘要'],
-    ['pages', '页数'], ['relevance', '与自己论文的相关性'], ['tags', '标签'],
-    ['note', '备注'], ['fileName', '源文件名']
-  ];
-  // 表格默认列（较窄的一组）
-  const COLS = [
-    { k: '_cb', t: '', w: 34, fixed: true },
-    { k: 'title', t: '题目', w: 300 },
-    { k: 'authors', t: '作者', w: 100 },
-    { k: 'year', t: '年代', w: 66 },
-    { k: 'type', t: '期刊/论文类型', w: 150 },
-    { k: 'source', t: '期刊/学校', w: 140 },
-    { k: 'major', t: '学科专业', w: 100 },
-    { k: 'keywords', t: '关键词', w: 190 },
-    { k: 'pages', t: '页数', w: 56 },
-    { k: 'relevance', t: '相关性', w: 66 },
-    { k: 'tags', t: '标签', w: 110 },
-    { k: '_act', t: '操作', w: 140, fixed: true }
-  ];
+  // 字段统一定义在 fields.js，这里只做引用
+  const PF = window.PaperFields;
+  const PAGE_FIELDS = PF.ALL.filter(f => f.kind !== 'figures').map(f => [f.k, f.label]);
+  // 表格列：操作列固定，其余按 fields.js 的 TABLE_COLS 顺序渲染
+  const COLS = [{ k: '_cb', t: '', w: 34, fixed: true }]
+    .concat(PF.TABLE_COLS.map(k => ({ k, t: PF.LABELS[k], w: PF.BY_KEY[k].w || 110 })))
+    .concat([{ k: '_act', t: '操作', w: 140, fixed: true }]);
   const CAT_CLASS = {
     '期刊论文': 'c-journal', '硕士学位论文': 'c-master', '博士学位论文': 'c-doctor',
     '会议论文': 'c-conf', '研究报告': 'c-report'
@@ -86,6 +71,12 @@
         if (typeof p.note !== 'string') p.note = '';
         if (typeof p.keywords !== 'string') p.keywords = '';
         if (typeof p.abstract !== 'string') p.abstract = '';
+        // 新增的深度字段与图示字段，旧数据可能缺失
+        ['background', 'purpose', 'method', 'framework', 'innovation',
+         'conclusion', 'dimensions', 'criteria', 'topics'].forEach(k => {
+          if (typeof p[k] !== 'string') p[k] = '';
+        });
+        if (!Array.isArray(p.figures)) p.figures = [];
       });
     } catch (e) { papers = []; sel = new Set(); annotations = {}; }
   }
@@ -181,6 +172,98 @@
       inp.addEventListener('cancel', () => resolve(null));
       inp.click();
     });
+  }
+
+  // ---------- AI 设置与抽取 ----------
+  function openAiCfg() {
+    const c = window.PaperAI.getCfg();
+    const sel = $('aiPreset');
+    if (!sel.options.length) {
+      window.PaperAI.PRESETS.forEach((p, i) => {
+        const o = document.createElement('option');
+        o.value = String(i); o.textContent = p.name;
+        sel.appendChild(o);
+      });
+      sel.onchange = () => {
+        const pr = window.PaperAI.PRESETS[+sel.value];
+        if (pr.base) $('aiBase').value = pr.base;
+        if (pr.model) $('aiModel').value = pr.model;
+      };
+    }
+    $('aiBase').value = c.base || window.PaperAI.PRESETS[0].base;
+    $('aiKey').value = c.key || '';
+    $('aiModel').value = c.model || window.PaperAI.PRESETS[0].model;
+    $('aiStatus').textContent = '';
+    $('aiModal').classList.add('on');
+  }
+  function saveAiCfg() {
+    window.PaperAI.setCfg({
+      base: $('aiBase').value.trim(), key: $('aiKey').value.trim(),
+      model: $('aiModel').value.trim()
+    });
+    $('aiModal').classList.remove('on');
+    toast('AI 设置已保存');
+  }
+  async function testAi() {
+    saveAiCfgQuiet();
+    $('aiStatus').textContent = '正在测试…';
+    const r = await window.PaperAI.ping();
+    $('aiStatus').textContent = r.ok ? '✓ 连接成功，可以开始抽取' : '✗ ' + r.error;
+  }
+  function saveAiCfgQuiet() {
+    window.PaperAI.setCfg({
+      base: $('aiBase').value.trim(), key: $('aiKey').value.trim(),
+      model: $('aiModel').value.trim()
+    });
+  }
+
+  // 取一篇论文的正文文本（用于 AI 抽取）
+  async function paperText(p, lib) {
+    const buf = fileCache.get(p.id);
+    if (!buf) return null;
+    const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
+    let txt = '';
+    // 前 12 页通常已含摘要、绪论与研究方法，足够抽取深度字段
+    const n = Math.min(doc.numPages, 12);
+    for (let i = 1; i <= n; i++) {
+      const pg = await doc.getPage(i);
+      const tc = await pg.getTextContent();
+      txt += tc.items.map(x => x.str).join('\n') + '\n';
+    }
+    return window.PaperParser.flatten(txt);
+  }
+
+  async function aiExtractSelected() {
+    const list = papers.filter(p => sel.has(p.id));
+    if (!list.length) { toast('请先勾选要抽取的论文'); return; }
+    if (!window.PaperAI.isReady()) {
+      toast('请先配置 AI（点顶栏「AI 设置」）');
+      openAiCfg();
+      return;
+    }
+    if (!confirm('将把所选论文的内容发送到你配置的 AI 服务进行抽取，是否继续？')) return;
+    const lib = await pdfjs();
+    let ok = 0, skip = 0, fail = 0;
+    const errs = [];
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      setStatus(`AI 抽取 ${i + 1}/${list.length}`, 'busy');
+      const text = await paperText(p, lib).catch(() => null);
+      if (!text) { skip++; continue; }
+      const r = await window.PaperAI.extract(p, text);
+      if (r.ok) {
+        // 只写入当前为空的字段，不覆盖已有内容（无论是人工还是上次抽取的）
+        Object.keys(r.fields).forEach(k => { if (!p[k]) p[k] = r.fields[k]; });
+        ok++;
+      } else { fail++; errs.push(p.title.slice(0, 12) + '：' + r.error); }
+    }
+    setStatus('');
+    save(); render();
+    let msg = `AI 抽取完成 ${ok} 篇`;
+    if (skip) msg += `，${skip} 篇缺原文件`;
+    if (fail) msg += `，${fail} 篇失败`;
+    toast(msg);
+    if (errs.length) console.warn('AI 抽取失败明细', errs);
   }
 
   async function handleFiles(files, srcLabel) {
@@ -488,16 +571,8 @@
   }
 
   // ---------- 编辑弹窗 ----------
-  const FIELDS = [
-    ['title', '题目', 'text', 1], ['authors', '作者', 'text', 0],
-    ['year', '年代', 'text', 0], ['type', '期刊/论文类型', 'text', 0],
-    ['category', '所属分类', 'select', 0], ['source', '期刊名称 / 学校', 'text', 0],
-    ['school', '学位授予单位', 'text', 0], ['major', '学科专业', 'text', 0],
-    ['supervisor', '导师', 'text', 0], ['pages', '页数', 'number', 0],
-    ['relevance', '与自己论文的相关性', 'select', 0], ['tags', '标签（逗号分隔）', 'text', 1],
-    ['keywords', '关键词', 'text', 1], ['abstract', '摘要', 'textarea', 1],
-    ['note', '备注 / 笔记', 'textarea', 1], ['fileName', '源文件名', 'text', 1]
-  ];
+  // 编辑弹窗字段：text/textarea 占满一行，其余半行
+  const FIELDS = PF.ALL.map(f => [f.k, f.label, f.kind, (f.kind === 'textarea' || f.kind === 'figures' || f.k === 'title' || f.k === 'keywords' || f.k === 'tags' || f.k === 'topics') ? 1 : 0]);
   function openEdit(id) {
     const p = papers.find(x => x.id === id); if (!p) return;
     editId = id;
@@ -508,6 +583,32 @@
     FIELDS.forEach(([k, label, kind, full]) => {
       const f = el('div', 'fld' + (full ? ' full' : ''));
       f.appendChild(el('label', null, label));
+      if (kind === 'figures') {
+        // 图示：只读缩略图列表 + 删除，新增走检阅模式的「截图收藏」
+        const figs = Array.isArray(p.figures) ? p.figures : [];
+        const box = el('div', 'figbox');
+        if (!figs.length) box.appendChild(el('div', 'hint', '暂无。到检阅模式里框选 PDF 上的图即可收藏。'));
+        figs.forEach((fg, i) => {
+          const card = el('div', 'figcard');
+          const im = document.createElement('img');
+          im.src = fg.data; im.alt = fg.caption || ('图' + (i + 1));
+          im.title = (fg.caption || '') + '（第' + fg.page + '页）';
+          card.appendChild(im);
+          const cap = el('div', 'figcap', (fg.caption || '图' + (i + 1)) + ' · 第' + fg.page + '页');
+          card.appendChild(cap);
+          const del = el('button', 'rowbtn', '删除');
+          del.onclick = () => {
+            if (!confirm('删除这张图？')) return;
+            p.figures.splice(i, 1); save(); openEdit(id); render();
+          };
+          card.appendChild(del);
+          box.appendChild(card);
+        });
+        f.appendChild(box);
+        if (PF.BY_KEY[k].hint) f.appendChild(el('div', 'hint', PF.BY_KEY[k].hint));
+        g.appendChild(f);
+        return;   // figures 不参与 input 绑定
+      }
       let input;
       if (kind === 'textarea') { input = document.createElement('textarea'); input.value = p[k] || ''; }
       else if (kind === 'select') {
@@ -518,6 +619,7 @@
       } else { input = document.createElement('input'); input.type = kind; input.value = p[k] == null ? '' : p[k]; }
       input.dataset.k = k;
       f.appendChild(input);
+      if (PF.BY_KEY[k] && PF.BY_KEY[k].hint) f.appendChild(el('div', 'hint', PF.BY_KEY[k].hint));
       if (k === 'fileName') f.appendChild(el('div', 'hint', '仅记录来源，不会保存 PDF 文件本身'));
       g.appendChild(f);
     });
@@ -534,13 +636,7 @@
   }
 
   // ---------- 对比 ----------
-  const CMP_ROWS = [
-    ['title', '题目'], ['authors', '作者'], ['year', '年代'], ['type', '文献类型'],
-    ['category', '所属分类'], ['source', '期刊/学校'], ['school', '学位授予单位'],
-    ['major', '学科专业'], ['supervisor', '导师'], ['pages', '页数'],
-    ['relevance', '相关度'], ['tags', '标签'], ['keywords', '关键词'],
-    ['abstract', '摘要'], ['note', '备注']
-  ];
+  const CMP_ROWS = PF.COMPARE_ROWS.map(k => [k, PF.LABELS[k]]);
   function openCompare() {
     const list = papers.filter(p => sel.has(p.id));
     if (list.length < 2) { toast('至少勾选 2 篇论文才能对比'); return; }
@@ -567,7 +663,20 @@
       const allSame = norm.every(v => v === norm[0] && v !== '');
       list.forEach((p, i) => {
         const td = el('td', allSame ? 'same' : (norm[i] ? 'diff' : ''));
-        td.textContent = vals[i] || '—';
+        if (k === 'figures') {
+          // 图示列：并排缩略图，点击看大图
+          const figs = Array.isArray(p.figures) ? p.figures : [];
+          if (!figs.length) td.textContent = '—';
+          figs.forEach(fg => {
+            const im = document.createElement('img');
+            im.src = fg.data; im.className = 'cmpfig';
+            im.title = (fg.caption || '') + '（第' + fg.page + '页）';
+            im.onclick = () => window.open(fg.data, '_blank');
+            td.appendChild(im);
+          });
+          // 数量不同即视为差异
+          td.className = figs.length ? 'diff' : '';
+        } else td.textContent = vals[i] || '—';
         tr.appendChild(td);
       });
       tb.appendChild(tr);
@@ -693,6 +802,12 @@
     };
     $('btnExport').onclick = exportXlsx;
     $('btnReparse').onclick = reparseAll;
+    $('btnAiCfg').onclick = openAiCfg;
+    $('aiMX').onclick = () => $('aiModal').classList.remove('on');
+    $('aiCancel').onclick = () => $('aiModal').classList.remove('on');
+    $('aiSave').onclick = saveAiCfg;
+    $('aiTest').onclick = testAi;
+    $('btnAiExtract').onclick = aiExtractSelected;
 
     $('btnCompare').onclick = openCompare;
     $('btnCloseDrawer').onclick = closeCompare;

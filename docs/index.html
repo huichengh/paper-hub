@@ -317,6 +317,17 @@
   }
   .pop textarea:focus{border-color:var(--acc); box-shadow:0 0 0 3px rgba(37,99,235,.1)}
   .pop-foot{display:flex; gap:7px; justify-content:flex-end; margin-top:9px}
+  .pop-fill{display:flex; align-items:center; gap:6px; margin-top:9px; padding-top:9px; border-top:1px dashed var(--line)}
+  .pop-fill-t{font-size:11px; color:var(--txt3); white-space:nowrap}
+  .pop-fill select{flex:1; min-width:0; font-size:12px; padding:3px 5px}
+  .figbox{display:flex; flex-wrap:wrap; gap:10px}
+  .figcard{width:150px; border:1px solid var(--line); border-radius:6px; padding:6px; background:#fff}
+  .figcard img{width:100%; display:block; border-radius:4px; cursor:zoom-in}
+  .figcap{font-size:11px; color:var(--txt2); margin-top:5px; line-height:1.5}
+  .cmpfig{max-width:190px; max-height:130px; display:block; margin-bottom:6px; border:1px solid var(--line); border-radius:4px; cursor:zoom-in}
+  .shotmask{position:absolute; inset:0; z-index:30; cursor:crosshair; background:rgba(37,99,235,.06)}
+  .shotrect{position:absolute; border:1.5px dashed var(--acc); background:rgba(37,99,235,.13); pointer-events:none}
+  .rd-shooting .txt-layer{pointer-events:none}
 
   @media(max-width:900px){
     aside{display:none} .fgrid{grid-template-columns:1fr} #q{width:100%}
@@ -332,6 +343,7 @@
   <span id="status" class="status"></span>
   <button class="btn" id="btnImport">导入备份</button>
   <button class="btn" id="btnReparse" title="对库中文献重新跑一遍解析规则">重新解析</button>
+  <button class="btn" id="btnAiCfg" title="配置大模型，用于自动抽取研究背景、研究方法等深度字段">AI 设置</button>
   <button class="btn" id="btnExport">导出 Excel</button>
   <button class="btn primary" id="btnCompare">对比 (0)</button>
 </header>
@@ -412,6 +424,7 @@
       <div class="spacer"></div>
       <button class="btn sm" id="btnSelAll">全选当前</button>
       <button class="btn sm" id="btnSelNone">清空勾选</button>
+      <button class="btn sm" id="btnAiExtract" title="用 AI 抽取勾选文献的深度字段">AI 抽取所选</button>
     </div>
 
     <div class="tablebox">
@@ -455,6 +468,42 @@
   </div>
 </div>
 
+<!-- AI 设置弹窗 -->
+<div class="modal" id="aiModal">
+  <div class="mbox" style="width:min(560px,94vw)">
+    <div class="mhead"><h3>AI 抽取设置</h3><button class="x" id="aiMX">×</button></div>
+    <div class="mbody">
+      <div class="tip" style="margin-bottom:12px">
+        配置后，可把 PDF 的摘要与正文发给大模型，自动抽取研究背景、研究目的、研究方法、
+        亮点与创新点、主要结论、维度与因素、评价标准体系等字段。<br>
+        <b>注意：内容会发送到你配置的第三方服务，请自行确认是否可外发。</b>
+      </div>
+      <div class="fgrid" style="grid-template-columns:1fr">
+        <div class="fld"><label>服务商</label>
+          <select id="aiPreset"></select>
+        </div>
+        <div class="fld"><label>接口地址（Base URL）</label>
+          <input type="text" id="aiBase" placeholder="https://api.deepseek.com/v1">
+        </div>
+        <div class="fld"><label>API Key</label>
+          <input type="password" id="aiKey" placeholder="sk-...">
+          <div class="hint">只存在你自己的浏览器里，不会上传到本项目的仓库或服务器</div>
+        </div>
+        <div class="fld"><label>模型名</label>
+          <input type="text" id="aiModel" placeholder="deepseek-chat">
+        </div>
+      </div>
+      <div id="aiStatus" class="tip" style="margin-top:10px"></div>
+    </div>
+    <div class="mfoot">
+      <button class="btn" id="aiTest">测试连接</button>
+      <div class="spacer"></div>
+      <button class="btn" id="aiCancel">取消</button>
+      <button class="btn primary" id="aiSave">保存</button>
+    </div>
+  </div>
+</div>
+
 <input type="file" id="bakFile" accept=".json" hidden>
 <div class="toast" id="toast"></div>
 
@@ -477,6 +526,7 @@
       <button class="btn sm" id="rdPrevPage" title="上一页">‹</button>
       <span class="rd-page" id="rdPage">-</span>
       <button class="btn sm" id="rdNextPage" title="下一页">›</button>
+      <button class="btn sm" id="rdShot" title="框选 PDF 上的图，收藏到「图示」字段">截图收藏</button>
       <button class="btn sm" id="rdExportNote">导出批注</button>
     </div>
   </div>
@@ -519,10 +569,17 @@
     <button class="btn sm" id="popCancel">取消</button>
     <button class="btn sm primary" id="popSave">保存批注</button>
   </div>
+  <div class="pop-fill">
+    <span class="pop-fill-t">或把这段原文写入：</span>
+    <select id="popField"></select>
+    <button class="btn sm" id="popFill">填充</button>
+  </div>
 </div>
 
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="parser.js"></script>
+<script src="fields.js"></script>
+<script src="ai.js"></script>
 <script src="reader.js"></script>
 <script src="app.js"></script>
 </body>

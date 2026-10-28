@@ -55,6 +55,16 @@
       };
       box.appendChild(b);
     });
+    // 「写入字段」下拉：只列深度字段（研究背景/目的/方法/结论…）
+    const fs = $('popField');
+    fs.innerHTML = '';
+    (window.PaperFields ? window.PaperFields.FILL_TARGETS : []).forEach(f => {
+      const o = document.createElement('option');
+      o.value = f.k; o.textContent = f.label;
+      fs.appendChild(o);
+    });
+    $('popFill').onclick = fillField;
+    $('rdShot').onclick = startShot;
     // 选区变化时弹出气泡
     document.addEventListener('selectionchange', onSelChange);
     document.addEventListener('keydown', e => {
@@ -497,5 +507,99 @@
     api.toast('已写入「备注」字段');
   }
 
+  // ---------- 把选中原文写入指定字段 ----------
+  function fillField() {
+    if (!pending || !pending.text) { api.toast('请先在正文里选中一段文字'); return; }
+    const key = $('popField').value;
+    if (!key) return;
+    const f = (window.PaperFields.BY_KEY || {})[key];
+    const label = f ? f.label : key;
+    const cur2 = cur;
+    const text = pending.text.trim();
+    // 追加而非覆盖：避免把已整理好的内容冲掉
+    const old = cur2[key] || '';
+    if (old.includes(text.slice(0, 40))) { api.toast('该字段已包含这段内容'); return; }
+    cur2[key] = old ? old + '\n' + text : text;
+    api.save();
+    closePop();
+    window.getSelection().removeAllRanges();
+    api.toast('已追加到「' + label + '」');
+  }
+
+  // ---------- 框选截图收藏 ----------
+  let shotState = null;
+  function startShot() {
+    if (!pages.length) { api.toast('PDF 尚未渲染完成'); return; }
+    api.toast('在页面上拖出矩形框，即可收藏该区域为「图示」');
+    document.getElementById('reader').classList.add('rd-shooting');
+    // 给每一页盖一层透明蒙版用于框选
+    pages.forEach(rec => {
+      if (!rec || rec.shotMask) return;
+      const mask = el('div', 'shotmask');
+      mask.dataset.page = rec.n;
+      rec.wrap.appendChild(mask);
+      rec.shotMask = mask;
+      mask.addEventListener('mousedown', e => beginDrag(e, rec, mask));
+    });
+  }
+  function endShot() {
+    document.getElementById('reader').classList.remove('rd-shooting');
+    pages.forEach(rec => {
+      if (rec && rec.shotMask) { rec.shotMask.remove(); rec.shotMask = null; }
+    });
+  }
+  function beginDrag(e, rec, mask) {
+    e.preventDefault();
+    const wr = mask.getBoundingClientRect();
+    const x0 = e.clientX - wr.left, y0 = e.clientY - wr.top;
+    const rect = el('div', 'shotrect');
+    mask.appendChild(rect);
+    shotState = { rec, mask, rect, x0, y0, wr };
+
+    const move = ev => {
+      const x1 = ev.clientX - wr.left, y1 = ev.clientY - wr.top;
+      const l = Math.min(x0, x1), t = Math.min(y0, y1);
+      const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+      rect.style.left = l + 'px'; rect.style.top = t + 'px';
+      rect.style.width = w + 'px'; rect.style.height = h + 'px';
+    };
+    const up = ev => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      const x1 = ev.clientX - wr.left, y1 = ev.clientY - wr.top;
+      const l = Math.min(x0, x1), t = Math.min(y0, y1);
+      const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+      rect.remove();
+      endShot();
+      if (w < 12 || h < 12) return;   // 误点，不收藏
+      captureFigure(rec, l, t, w, h);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
+
+  function captureFigure(rec, l, t, w, h) {
+    const canvas = rec.canvas;
+    if (!canvas) return;
+    // 蒙版是 CSS 像素，canvas 可能是设备像素，需要换算
+    const sx = canvas.width / rec.wrap.clientWidth;
+    const sy = canvas.height / rec.wrap.clientHeight;
+    const out = document.createElement('canvas');
+    out.width = Math.round(w * sx); out.height = Math.round(h * sy);
+    const ctx = out.getContext('2d');
+    ctx.drawImage(canvas, l * sx, t * sy, w * sx, h * sy, 0, 0, out.width, out.height);
+    const data = out.toDataURL('image/png');
+    const cap = prompt('给这张图起个名字（如「图4-1 WBS工作分解结构图」）', '第' + rec.n + '页 图示');
+    if (cap === null) return;
+    if (!Array.isArray(cur.figures)) cur.figures = [];
+    cur.figures.push({ data, page: rec.n, caption: cap || ('第' + rec.n + '页'), at: new Date().toISOString() });
+    api.save();
+    api.toast('已收藏到「图示」字段，共 ' + cur.figures.length + ' 张');
+  }
+
   window.ReaderMode = { init, open, close, repaint: paint };
 })();
+
+/* ================= 一键填充与截图收藏 =================
+ * 挂在 ReaderMode 之外需要访问其闭包状态，因此通过 init 时注册。
+ */
