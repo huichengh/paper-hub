@@ -102,6 +102,87 @@
     return pdfjsP;
   }
 
+  /**
+   * 重新解析：对库中文献用「当前版本的解析规则」重跑一遍。
+   * 解决一个真实使用痛点——解析规则更新后，存进 localStorage 的旧记录不会自动刷新，
+   * 用户会误以为"改了还是不对"。此函数保留人工改过的字段（相关度/标签/备注/批注），
+   * 只刷新自动提取的字段，避免覆盖用户手工整理的内容。
+   *
+   * 页面刷新后原文件的内存缓存会丢，因此缺缓存时先引导用户重新指认 PDF 所在文件夹，
+   * 再按「文件名 + 大小」把文件与库中记录配对，一次性完成重解析。
+   */
+  async function reparseAll() {
+    if (!papers.length) { toast('文献库为空，先上传 PDF'); return; }
+    const lib = await pdfjs();
+    const AUTO = ['title', 'authors', 'year', 'type', 'category', 'source', 'school',
+      'major', 'supervisor', 'coSupervisor', 'keywords', 'abstract', 'pages'];
+
+    // 缺原文件的篇目
+    const missing = papers.filter(p => !fileCache.has(p.id));
+    if (missing.length) {
+      const picked = await askForFolder(
+        `库中有 ${missing.length} 篇缺 PDF 原文件（刷新页面后缓存会清空）。\n` +
+        '请选择存放这些 PDF 的文件夹，平台会自动按文件名配对并重新解析。');
+      if (!picked) { toast('已取消'); return; }
+      // 把选中的文件按「文件名」建立索引，回填缓存
+      const byName = new Map();
+      for (const f of picked) byName.set(f.name, f);
+      for (const p of missing) {
+        const f = byName.get(p.fileName);
+        if (f) {
+          const buf = await f.arrayBuffer();
+          fileCache.set(p.id, buf.slice(0));
+        }
+      }
+    }
+
+    let ok = 0, need = 0, fail = 0;
+    setStatus('重新解析中…', 'busy');
+    for (const p of papers) {
+      const buf = fileCache.get(p.id);
+      if (!buf) { need++; continue; }
+      try {
+        const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
+        let txt = '';
+        const n = Math.min(doc.numPages, 8);
+        for (let i = 1; i <= n; i++) {
+          const pg = await doc.getPage(i);
+          const tc = await pg.getTextContent();
+          txt += tc.items.map(x => x.str).join('\n') + '\n===PAGE===\n';
+        }
+        let meta = {};
+        try { meta = (await doc.getMetadata()).info || {}; } catch (e) { }
+        const r = window.PaperParser.parse(
+          { title: meta.Title, author: meta.Author, size: p.fileSize }, txt, doc.numPages, p.fileName);
+        AUTO.forEach(k => { p[k] = r[k]; });
+        ok++;
+      } catch (e) { fail++; }
+    }
+    setStatus('');
+    save(); render();
+    const msg = [`已重新解析 ${ok} 篇`];
+    if (need) msg.push(`${need} 篇未找到对应 PDF（文件名需与库中一致）`);
+    if (fail) msg.push(`${fail} 篇解析失败`);
+    toast(msg.join('，'));
+  }
+
+  /** 弹出目录选择器，返回 FileList；用户取消则返回 null */
+  function askForFolder(hint) {
+    return new Promise(resolve => {
+      if (hint) toast(hint);
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      // 优先目录选择；不支持的浏览器退回多选文件
+      if ('webkitdirectory' in document.createElement('input')) inp.webkitdirectory = true;
+      inp.multiple = true;
+      inp.accept = 'application/pdf,.pdf';
+      inp.onchange = () => resolve(inp.files && inp.files.length ? inp.files : null);
+      // 取消选择时不触发 change，用 focus 兜底
+      inp.addEventListener('cancel', () => resolve(null));
+      inp.click();
+    });
+  }
+
   async function handleFiles(files, srcLabel) {
     const all = [...files];
     const list = all.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
@@ -611,6 +692,7 @@
       papers = []; sel.clear(); cat = ''; save(); render(); toast('已清空');
     };
     $('btnExport').onclick = exportXlsx;
+    $('btnReparse').onclick = reparseAll;
 
     $('btnCompare').onclick = openCompare;
     $('btnCloseDrawer').onclick = closeCompare;
