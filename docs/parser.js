@@ -157,7 +157,7 @@
     r.type = pickType(H, W);
     r.category = r.type || '其他';
     r.year = pickYear(H, W, pageFlat);
-    const org = pickOrg(H, W, pageFlat);
+    const org = pickOrg(H, W, pageFlat, r.type);
     r.school = org.school; r.source = org.source;
     r.major = pickMajor(H, pageFlat);
     const sup = pickSupervisor(H, pageFlat);
@@ -166,9 +166,16 @@
     r.keywords = pickKeywords(H, W);
     r.abstract = pickAbstract(pages);
 
-    ['year', 'school', 'source', 'major', 'supervisor', 'keywords', 'abstract'].forEach(k => {
+    // 期刊论文没有专业/导师，这两项留空是正常的，不该反复提示
+    const isJournal = /期刊|会议|专著|报告/.test(r.type || '');
+    ['year', 'source', 'keywords', 'abstract'].forEach(k => {
       if (!r[k]) r.needCheck.push(k);
     });
+    if (!isJournal) {
+      if (!r.school) r.needCheck.push('school');
+      if (!r.major) r.needCheck.push('major');
+      if (!r.supervisor) r.needCheck.push('supervisor');
+    }
     return r;
   }
 
@@ -217,16 +224,34 @@
   }
 
   // ================= 作者 =================
+  // 期刊论文的作者常带上标单位号：「陈 果1 陈 蕴2」。
+  // 若不先按上标号切开，整串会被当成一个人名、判定失败，
+  // 最终只剩文件名里的第一位作者（用户看到的就是"作者只识别出一个"）。
+  const SUP = { '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁰': '0' };
+  function splitSup(t) {
+    return String(t)
+      .replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰]/g, c => SUP[c])
+      .replace(/(?<=[一-龥])[\d,，*†‡]+(?=[一-龥])/g, '|')   // 陈果1陈蕴 → 陈果|陈蕴
+      .split('|')
+      .map(x => x.replace(/^[\d,，*†‡\s]+|[\d,，*†‡\s]+$/g, ''))
+      .filter(Boolean);
+  }
   function cleanPeople(s) {
     let v = fw(flatten(s)).replace(LABEL_END, ' ');
     v = v.replace(/[（(][^)）]*[)）]/g, '')
       .replace(/(教授|副教授|讲师|研究员|高级工程师|高级经济师|工程师|博士生导师|硕士生导师|指导教师|导师|博士|硕士|等)/g, ' ');
     // 去掉尾部英文（英文文献里作者后可能跟机构）
     v = v.replace(/[A-Za-z]{4,}(\s+[A-Za-z]{2,})*$/, '');
-    const parts = v.split(/[,，;；、\/|·\s]+/).map(x => x.trim()).filter(Boolean);
+    let parts = v.split(/[,，;；、\/|·\s]+/).map(x => x.trim()).filter(Boolean);
+    // 带数字上标的串再切一次；切完仍保留原顺序
+    if (/[\d¹²³⁴⁵⁶⁷⁸⁹⁰]/.test(v)) parts = parts.flatMap(splitSup).filter(Boolean);
     const NAME_CH = '\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF';
     const reName = new RegExp('^[' + NAME_CH + ']{2,4}$');
-    const good = parts.filter(p => reName.test(p) || /^[A-Z][a-z]{1,15}$/.test(p));
+    // 一些两字的版式词会被误当成姓名，排除
+    const NOT_NAME = /^(摘要|目录|引言|绪论|致谢|附录|关键词|论文|学位|研究|工程|管理|大学|学院|公司|中心|项目|作者|导师|日期|学校|代码|分类|密级|编号|学号|方向|领域|学校代码|分类号|研究生|论文题目|学位论文|学科专业|指导教师|作者姓名|专业名称|申请学位)$/;
+    // 以这些词结尾的基本不是人名（防「管理研究」被当成作者）
+    const NOT_END = /(研究|管理|工程|分析|评价|体系|方法|模式|技术|风险|对策|路径|策略|机制|应用|设计|优化|构建|探讨|综述|理论|实践|问题)$/;
+    const good = parts.filter(p => (reName.test(p) && !NOT_NAME.test(p) && !NOT_END.test(p)) || /^[A-Z][a-z]{1,15}$/.test(p));
     if (!good.length) return '';
     return good.slice(0, 8).join(' ');
   }
@@ -234,11 +259,21 @@
     /作\s*者\s*姓\s*名\s*[:：]?/, /作\s*者\s*[:：]/, /作\s*者\s*全\s*名\s*[:：]?/,
     /[Aa]uthors?\s*[:：]?/, /[Aa]uthor\s*[:：]?/
   ];
+  // 中文期刊版式：题目下面直接是「陈 果1 陈 蕴2」这样的作者行，前面没有「作者：」标签
+  function looksLikeAuthorLine(ln) {
+    const t = String(ln).replace(/\s+/g, ' ').trim();
+    if (!/^[一-龥][一-龥\s\d,，]{1,22}$/.test(t)) return '';
+    const c = cleanPeople(t);
+    if (!c) return '';
+    const names = c.split(' ').filter(Boolean);
+    const han = (t.match(/[一-龥]/g) || []).length;
+    if (names.length < 1 || names.length > 5) return '';
+    if (han > names.length * 4 + 2) return '';   // 汉字数远超姓名长度，多半是标题/正文
+    return c;
+  }
   function pickAuthors(meta, head, F, title, H) {
     const v = cleanPeople(fieldVal(H, AUTHOR_LABELS));
     if (v) return v;
-    const seg = F.replace(/\.pdf$/i, '').split('_');
-    if (seg.length >= 2) { const c = cleanPeople(seg.slice(1).join('_')); if (c && c.length <= 12) return c; }
     const ls = linesOf(head).slice(0, 30);
     const ti = ls.findIndex(l => cleanTitle(l) === title);
     if (ti >= 0) {
@@ -247,6 +282,26 @@
         if (c && c.length <= 12) return c;
       }
     }
+    // 有些 PDF 每个字都是独立文本块，压平后「陈 果1 陈 蕴2」变成「陈果1陈蕴2」，
+    // 按行切分完全没用。改成取「题目之后紧跟的那一小段」。
+    const tn = flatten(title || '');
+    if (tn.length >= 6) {
+      const Hn = H.replace(/\s+/g, ''), tn2 = tn.replace(/\s+/g, '');
+      const at = Hn.indexOf(tn2);
+      if (at >= 0) {
+        const rest = Hn.slice(at + tn2.length, at + tn2.length + 40).split(/[（(，,。;；：:、\s]/)[0];
+        const c = cleanPeople(rest);
+        if (c && c.split(' ').filter(Boolean).length <= 5) return c;
+      }
+    }
+    // 标题常被拆成两三行，上面的精确匹配会失手；退一步在前 18 行里找作者行
+    for (let i = 0; i < Math.min(ls.length, 18); i++) {
+      if (cleanTitle(ls[i]) === title) continue;
+      const c = looksLikeAuthorLine(ls[i]);
+      if (c) return c;
+    }
+    const seg = F.replace(/\.pdf$/i, '').split('_');
+    if (seg.length >= 2) { const c = cleanPeople(seg.slice(1).join('_')); if (c && c.length <= 12) return c; }
     if (meta && meta.author && meta.author.trim().length > 1) return meta.author.trim();
     return '';
   }
@@ -300,7 +355,52 @@
     const c = t.match(/([一-龥]{2,14}(?:学院|研究院|研究所))/);
     return c ? c[1] : '';
   }
-  function pickOrg(H, W, pageFlat) {
+  // 「所在学院：土木工程学院」给的是学院，不是学位授予单位。
+  // 校名在封面/页眉里会反复出现，所以按出现频次反推最可能的校名。
+  // 做法：对每处「大学」取不同长度的后缀投票，再取「票数最高里最长的那个」，
+  // 这样能自动甩掉「于华侨大学」这类前面粘了虚词的脏匹配。
+  function dominantUniversity(text, minCount) {
+    // 先把「教授/主席/学院」这类词替换成分隔符，避免「田洪阵副教授天津工业大学」
+    // 这种粘连串被当成校名投出一票
+    const BAD = '教授|副教授|讲师|研究员|主席|委员|主任|导师|老师|单位|学院|学位|研究所|办公室';
+    const t = String(text || '').replace(new RegExp('(?:' + BAD + ')', 'g'), '|');
+    const cnt = {};
+    const re = /大学|大學/g; let m;
+    while ((m = re.exec(t))) {
+      const end = m.index + m[0].length;
+      for (let len = 2; len <= 8; len++) {
+        const s = t.slice(Math.max(0, end - len - 2), end);
+        if (s.length < 4) continue;
+        if (!/^[一-龥]+$/.test(s)) continue;
+        cnt[s] = (cnt[s] || 0) + 1;
+      }
+    }
+    const need = minCount || 2;
+    const keys = Object.keys(cnt).filter(k => cnt[k] >= need);
+    if (!keys.length) return '';
+    const max = Math.max.apply(null, keys.map(k => cnt[k]));
+    return keys.filter(k => cnt[k] === max).sort((a, b) => b.length - a.length)[0];
+  }
+
+  // 期刊名：显式标签 → 「XX学报/杂志/期刊」 → 「第X卷 / 第X期」邻近的刊名
+  const JOURNAL_LABELS = [
+    /期\s*刊\s*名\s*称\s*[:：]?/, /发\s*表\s*期\s*刊\s*[:：]?/,
+    /刊\s*名\s*[:：]?/, /来\s*源\s*期\s*刊\s*[:：]?/, /原\s*载\s*[：:]?/
+  ];
+  function pickJournal(H) {
+    const lab = fieldVal(H, JOURNAL_LABELS);
+    if (lab) {
+      const v = lab.replace(/[\s,，。;；（(].*$/, '').trim();
+      if (v.length >= 3 && v.length <= 30) return v;
+    }
+    const jm = H.match(/([一-龥]{2,16}(?:学报|杂志|期刊|评论|导刊))/);
+    if (jm) return jm[1];
+    const jv = H.match(/([一-龥]{2,16})\s*[，,]?\s*(?:第\s*\d{1,3}\s*卷|\d{4}\s*年\s*第\s*\d{1,3}\s*期)/);
+    if (jv) return jv[1];
+    return '';
+  }
+
+  function pickOrg(H, W, pageFlat, type) {
     let school = extractOrg(fieldVal(H, ORG_LABELS));
     if (!school) {
       for (const p of pageFlat) {
@@ -309,11 +409,18 @@
       }
     }
     if (!school) school = extractOrg(H) || extractOrg(W.slice(0, 8000));
-    let source = '';
-    const jm = H.match(/([一-龥]{2,20}(?:学报|杂志|期刊))/) || W.slice(0, 6000).match(/([一-龥]{2,20}(?:学报|杂志|期刊))/);
-    if (jm) source = jm[1];
-    if (!source) source = school;
-    return { source, school: school || '' };
+    // 只拿到「XX学院」时，用全文最高频的校名补全（先在前几页找，再退到全文）
+    if (school && !/大学|大學/.test(school)) {
+      const head = pageFlat.slice(0, 6).join('\n');
+      const u = dominantUniversity(head, 2) || dominantUniversity(head, 1)
+        || dominantUniversity(W.slice(0, 60000), 2);
+      if (u) school = u;
+    }
+    const isThesis = /学位论?文/.test(type || '');
+    const journal = isThesis ? '' : pickJournal(H);
+    // 学位论文的来源是学校；期刊论文的来源是刊名，实在没有才退回学校
+    const source = isThesis ? (school || '') : (journal || school || '');
+    return { source, school: school || '', journal };
   }
 
   // ================= 专业 =================
@@ -465,18 +572,40 @@
 
   // ================= 关键词 =================
   const KW_LABELS = [/关\s*键\s*词\s*[:：]?/, /[Kk]ey\s*[wW]ords?\s*[:：]?/, /主题词\s*[:：]?/];
+  // 关键词区结束的标志：后面这些内容一律不算关键词
+  const KW_STOP = /(?:中\s*图\s*分\s*类\s*号|文\s*献\s*标\s*识\s*码|文\s*章\s*编\s*号|基\s*金\s*项\s*目|作\s*者\s*简\s*介|收\s*稿\s*日\s*期|DOI|\bAbstract\b|\bABSTRACT\b|Key\s*words?|【|［|\[|第\s*[一二三四五六七八九十0-9]+\s*章|1\s*[绪引]\s*[论语]|引\s*言|绪\s*论)/;
+  const KW_JUNK = /^(摘\s*要|abstract|关键词|key\s*words?|主题词|目录|引言|绪论|正文)$/i;
   function cleanKw(s) {
     if (!s) return '';
-    let v = flatten(s);
-    v = v.replace(/[（(][^)）]*[)）]/g, '');
+    let v = flatten(s).replace(/={3,}\s*PAGE\s*={3,}/g, ' ');
+    v = v.replace(/[（(][^)）]{0,60}[)）]/g, ' ');
     v = v.replace(/^(关键词|key\s*words?|主题词)\s*[:：]?\s*/i, '');
-    v = v.replace(/^[】』》）)\]]+/, '').replace(/^[【『《（(\[]+/, '').trim();
-    const cut = v.search(/[;；]/);
+    v = v.replace(/^[】』》）)\]:：\s]+/, '').replace(/^[【『《（(\[]+/, '').trim();
+    const cut = v.search(KW_STOP);
     if (cut > 0) v = v.slice(0, cut);
-    else if (!/[一-龥]/.test(v) && v.includes(',')) v = v.split(',').slice(0, 6).join(', ');
-    v = v.replace(/[。．.、\s]+$/, '').trim();
-    v = v.replace(/\s*\d+(\s+\d+)*$/, '').trim();
-    return v.replace(/[。．.、\s]+$/, '').slice(0, 200);
+    // 紧跟着英文标题/英文摘要时（「风险管理 Research on Schedule…」），
+    // 在第一个「中文＋连续英文」的位置截断，否则最后一项会拖一条长尾巴被丢掉
+    const lat = v.search(/[一-龥]\s?[A-Za-z]{3,}/);
+    if (lat > 0) v = v.slice(0, lat + 1);
+    // 逐项清理：去尾部的句号/顿号/编号，丢掉明显不是关键词的碎片
+    const tidy = arr => arr
+      .map(t => String(t)
+        .replace(/(\s+[A-Za-z]){2,}\s*$/, '')      // 版面噪声：质量评价 I I
+        .replace(/^[\s:：、,，;；。.]+|[\s:：、,，;；。.\d]+$/g, '')
+        .trim())
+      .filter(t => t.length >= 2 && t.length <= 30 && !KW_JUNK.test(t) && /[一-龥A-Za-z]/.test(t))
+      // 竖排/全角文本会把英文拆成「R i s k m a n a g e m e n t」，这种不要
+      .filter(t => !/^(\S\s)+\S$/.test(t));
+    // 中文关键词一般用「；」分隔，英文用「;」或「,」
+    let items = tidy(v.split(/[;；]+/));
+    if (items.length <= 1) items = tidy(v.split(/[，,、]+/));
+    if (items.length <= 1) items = tidy(v.split(/\s{2,}|\s(?=[A-Z])/));
+    // 只有一项且特别长时，多半是分隔符没被识别出来，按空格再拆一道
+    if (items.length === 1 && items[0].length > 24) {
+      const more = tidy(items[0].split(/\s+/));
+      if (more.length > 1) items = more;
+    }
+    return items.slice(0, 8).join('；').slice(0, 200);
   }
   function pickKeywords(H, W) {
     let v = cleanKw(fieldVal(H, KW_LABELS));
@@ -488,9 +617,14 @@
   function pickAbstract(pages) {
     for (let i = 0; i < Math.min(pages.length, 8); i++) {
       const p = flatten(pages[i]);
-      const m = p.match(/(?:摘\s*要|\bAbstract\b)\s*[:：]?\s*([\s\S]{60,1500}?)(?=关\s*键\s*词|Key\s*[wW]ords?|\bAbstract\b|Keywords|第[一二三四五六七八九十0-9]+章|1\s*[绪引]\s*[论语]|引\s*言|一、\s*绪论)/i);
+      const m = p.match(/(?:摘\s*要|\bAbstract\b)\s*[:：]?\s*([\s\S]{60,1500}?)(?=关\s*键\s*词|Key\s*[wW]ords?|\bAbstract\b|Keywords|第[一二三四五六七八九十0-9]+章|1\s*[绪引]\s*[论语]|引\s*言|一、\s*绪论|参\s*考\s*文\s*献|目\s*录)/i);
       if (m) {
-        const v = m[1].replace(/[\s:：,，;；.。、]+$/, '').replace(/\s+/g, ' ').trim();
+        let v = m[1]
+          // 「【摘 要】」的括号残片、罗马页码、重复的"摘要"字样都会留在值的开头
+          .replace(/^[\s:：,，;；.。、】』》）)\]]+/, '')
+          .replace(/^[（(]?\s*[IVXⅠⅡⅢⅣ]{1,4}\s+/, '')
+          .replace(/^(.{0,6}?)摘\s*要\s*[:：]?\s*/, '');
+        v = v.replace(/[\s:：,，;；.。、]+$/, '').replace(/\s+/g, ' ').trim();
         if (v.length > 50) return v.slice(0, 1200);
       }
     }

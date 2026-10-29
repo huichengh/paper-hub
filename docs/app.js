@@ -3,6 +3,9 @@
   'use strict';
 
   const KEY = 'paperhub.v1';
+  // 解析规则版本：规则一改就更新，用来提醒「旧条目还是旧规则的结果」
+  const RULES_VER = '2026-10-29b';
+  const VER_KEY = 'paperhub.rules';
   // 字段统一定义在 fields.js，这里只做引用
   const PF = window.PaperFields;
   const PAGE_FIELDS = PF.ALL.filter(f => f.kind !== 'figures').map(f => [f.k, f.label]);
@@ -82,6 +85,15 @@
   }
 
   // ---------- PDF 解析 ----------
+  function checkRulesVer() {
+    if (!papers.length) { localStorage.setItem(VER_KEY, RULES_VER); return; }
+    const old = localStorage.getItem(VER_KEY);
+    if (old === RULES_VER) return;
+    $('verOld').textContent = old || '更早';
+    $('verNew').textContent = RULES_VER;
+    $('verbar').style.display = 'flex';
+  }
+
   let pdfjsP = null;
   function pdfjs() {
     if (!pdfjsP) {
@@ -146,11 +158,13 @@
         const r = window.PaperParser.parse(
           { title: meta.Title, author: meta.Author, size: p.fileSize }, txt, doc.numPages, p.fileName);
         AUTO.forEach(k => { p[k] = r[k]; });
+        p.needCheck = Array.isArray(r.needCheck) ? r.needCheck : [];
         ok++;
       } catch (e) { fail++; }
     }
     setStatus('');
     save(); render();
+    if (ok) { localStorage.setItem(VER_KEY, RULES_VER); $('verbar').style.display = 'none'; }
     const msg = [`已重新解析 ${ok} 篇`];
     if (need) msg.push(`${need} 篇未找到对应 PDF（文件名需与库中一致）`);
     if (fail) msg.push(`${fail} 篇解析失败`);
@@ -339,6 +353,8 @@
     setTimeout(() => { prog.style.display = 'none'; bar.style.width = '0'; }, 400);
     setStatus('');
     save(); render();
+    // 新导入的内容已经是当前规则解析的，不必再提示重解析
+    if (ok) { localStorage.setItem(VER_KEY, RULES_VER); $('verbar').style.display = 'none'; }
     const msg = [];
     if (ok) msg.push(`成功导入 ${ok} 篇`);
     if (skip) msg.push(`${skip} 篇已在库中（同名同大小，已自动跳过）`);
@@ -526,8 +542,17 @@
         tdType.appendChild(b);
       } else tdType.textContent = '—';
       tr.appendChild(tdType);
-      tr.appendChild(el('td', null, p.source || '—'));
-      tr.appendChild(el('td', null, p.major || '—'));
+      [['source', p.source], ['major', p.major]].forEach(([k, v]) => {
+        const td = el('td');
+        const miss = (p.needCheck || []).indexOf(k) >= 0;
+        if (v) td.textContent = v;
+        else if (miss) {
+          const s = el('span', 'miss', '未识别');
+          s.title = 'PDF 里没找到这一项，点右侧「编辑」补录';
+          td.appendChild(s);
+        } else td.textContent = '—';
+        tr.appendChild(td);
+      });
       const tdK = el('td');
       if (p.keywords) {
         const w2 = el('div', 't-wrap');
@@ -632,7 +657,10 @@
       const k = inp.dataset.k;
       p[k] = inp.type === 'number' ? (inp.value === '' ? '' : +inp.value) : inp.value.trim();
     });
-    save(); closeEdit(); render(); toast('已保存');
+    save(); closeEdit(); render();
+    // 对比抽屉开着的话，改完要同步刷新，否则还显示「未识别」
+    if ($('drawer').classList.contains('on')) openCompare();
+    toast('已保存');
   }
 
   // ---------- 对比 ----------
@@ -676,7 +704,21 @@
           });
           // 数量不同即视为差异
           td.className = figs.length ? 'diff' : '';
-        } else td.textContent = vals[i] || '—';
+        } else {
+          const v = vals[i];
+          if (v) td.textContent = v;
+          else {
+            const def = PF.BY_KEY[k] || {};
+            const miss = (p.needCheck || []).indexOf(k) >= 0;
+            // 自动字段没抓到，明确写「未识别」，别用「—」让人误以为这篇本来就没有
+            if (def.auto && miss) {
+              td.classList.add('na');
+              td.textContent = '未识别';
+              td.title = '解析时没从 PDF 里找到这一项，双击可手动补录';
+              td.ondblclick = () => openEdit(p.id);
+            } else td.textContent = '—';
+          }
+        }
         tr.appendChild(td);
       });
       tb.appendChild(tr);
@@ -802,6 +844,9 @@
     };
     $('btnExport').onclick = exportXlsx;
     $('btnReparse').onclick = reparseAll;
+    $('verGo').onclick = reparseAll;
+    $('verHide').onclick = () => { $('verbar').style.display = 'none'; localStorage.setItem(VER_KEY, RULES_VER); };
+    checkRulesVer();
     $('btnAiCfg').onclick = openAiCfg;
     $('aiMX').onclick = () => $('aiModal').classList.remove('on');
     $('aiCancel').onclick = () => $('aiModal').classList.remove('on');

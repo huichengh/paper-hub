@@ -172,6 +172,20 @@
   .cmp thead th:first-child{left:0; z-index:5; width:132px; min-width:132px}
   .cmp td{background:var(--panel); min-width:200px}
   .cmp tr:hover td{background:#fafbfc}
+  /* 解析器没抓到、需要人工补录的单元格：虚线底纹，双击进编辑 */
+  .cmp td.na{color:#b45309; cursor:pointer; background-image:repeating-linear-gradient(45deg,#fffaf0,#fffaf0 6px,#fff6e5 6px,#fff6e5 12px)}
+  .cmp td.na:hover{text-decoration:underline}
+
+  /* 规则版本提示条 */
+  .verbar{
+    margin:0 0 10px; padding:9px 12px; border-radius:8px; font-size:12.5px;
+    background:#fffaf0; border:1px solid #f2d9a8; color:#8a5a00;
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  }
+  .linkbtn{background:none; border:none; color:#b45309; font:inherit; font-weight:600; cursor:pointer; padding:0 2px; text-decoration:underline}
+  .linkbtn.ghost{color:var(--txt3); font-weight:400}
+  /* 表格里「解析没抓到」的提示，跟人工留空的「—」区分开 */
+  .miss{color:#b45309; font-size:11.5px; border-bottom:1px dashed #e0b070; cursor:help}
   .same{background:var(--ok-soft) !important}
   .diff{background:#fffaf0 !important}
   .dtitle{font-weight:700; color:var(--txt); margin-bottom:3px; line-height:1.45}
@@ -425,6 +439,13 @@
       <button class="btn sm" id="btnSelAll">全选当前</button>
       <button class="btn sm" id="btnSelNone">清空勾选</button>
       <button class="btn sm" id="btnAiExtract" title="用 AI 抽取勾选文献的深度字段">AI 抽取所选</button>
+    </div>
+
+    <!-- 解析规则升级后旧数据不会自动变，这里提示一句 -->
+    <div class="verbar" id="verbar" style="display:none">
+      解析规则已更新（<span id="verOld"></span> → <span id="verNew"></span>）。旧条目仍是旧规则的结果，
+      <button class="linkbtn" id="verGo">重新解析一遍</button>
+      <button class="linkbtn ghost" id="verHide">知道了</button>
     </div>
 
     <div class="tablebox">
