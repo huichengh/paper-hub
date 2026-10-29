@@ -737,7 +737,22 @@
 
   function cmpMatrix() {
     const list = papers.filter(p => sel.has(p.id));
-    return { list, rows: CMP_ROWS.map(([k, label]) => ({ k, label, vals: list.map(p => String(p[k] == null ? '' : p[k])) })) };
+    return {
+      list,
+      rows: CMP_ROWS.map(([k, label]) => ({
+        k, label,
+        vals: list.map(p => {
+          if (k === 'figures') {
+            // 导出的是表格，不能把图片对象直接 String() 成 [object Object]
+            const figs = Array.isArray(p.figures) ? p.figures : [];
+            return figs.map((fg, i) =>
+              (fg.caption || ('图' + (i + 1))) + '（第' + (fg.page || '?') + '页）'
+            ).join('；');
+          }
+          return String(p[k] == null ? '' : p[k]);
+        })
+      }))
+    };
   }
   function exportCompare(kind) {
     const { list, rows } = cmpMatrix();
@@ -787,14 +802,20 @@
         const d = JSON.parse(fr.result);
         const inc = Array.isArray(d.papers) ? d.papers : [];
         if (!inc.length) { toast('备份里没有文献'); return; }
-        let n = 0, dup = 0;
-        // 与现有文献比对，避免备份与库中内容重复叠加
-        const seen = new Set(papers.map(p =>
-          ((p.title || '') + '|' + (p.authors || '')).trim()));
+        const incAnns = (d.annotations && typeof d.annotations === 'object') ? d.annotations : {};
+        let n = 0, dup = 0, annN = 0;
+        // oldId -> 恢复后的 id。重复论文也要记录映射，否则它的批注同样恢复不了
+        const idMap = {};
+        const byKey = new Map();
+        papers.forEach(p => byKey.set(((p.title || '') + '|' + (p.authors || '')).trim(), p));
         inc.forEach(p => {
+          if (!p || typeof p !== 'object') return;
+          const oldId = p.id;
           const key = ((p.title || '') + '|' + (p.authors || '')).trim();
-          if (key !== '|' && seen.has(key)) { dup++; return; }
+          const exist = key !== '|' ? byKey.get(key) : null;
+          if (exist) { dup++; if (oldId) idMap[oldId] = exist.id; return; }
           p.id = uid();
+          if (oldId) idMap[oldId] = p.id;
           // 补齐可能缺失的字段，保证后续判重与导出正常
           p.fileSize = p.fileSize || 0;
           p.pages = p.pages || 0;
@@ -802,13 +823,37 @@
           p.relevance = p.relevance || '';
           p.note = p.note || '';
           p.addedAt = p.addedAt || new Date().toISOString();
-          seen.add(key);
+          if (!Array.isArray(p.figures)) p.figures = [];
+          if (!Array.isArray(p.needCheck)) p.needCheck = [];
+          byKey.set(key, p);
           papers.push(p);
           n++;
         });
+        // 备份里论文会换新 id，批注必须同步改 pid 并挂到新 id 下
+        Object.keys(incAnns).forEach(oldId => {
+          const nid = idMap[oldId];
+          const list = Array.isArray(incAnns[oldId]) ? incAnns[oldId] : [];
+          if (!nid || !list.length) return;
+          const target = Array.isArray(annotations[nid]) ? annotations[nid] : [];
+          const seenAnn = new Set(target.map(a => a.id + '|' + (a.quote || '') + '|' + (a.text || '')));
+          list.forEach(a => {
+            if (!a || typeof a !== 'object') return;
+            const copy = Object.assign({}, a, { pid: nid });
+            const sig = copy.id + '|' + (copy.quote || '') + '|' + (copy.text || '');
+            if (seenAnn.has(sig)) return;
+            if (target.some(x => x.id === copy.id)) copy.id = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+            target.push(copy); seenAnn.add(sig); annN++;
+          });
+          annotations[nid] = target;
+        });
+        // 原备份里勾选的论文，恢复后尽量保持勾选状态
+        if (Array.isArray(d.sel)) d.sel.forEach(oldId => { if (idMap[oldId]) sel.add(idMap[oldId]); });
         save(); render();
-        toast(n ? `已导入 ${n} 篇` + (dup ? `，跳过重复 ${dup} 篇` : '')
-                 : `备份中的 ${dup} 篇都已存在于库中`);
+        const parts = [];
+        if (n) parts.push(`已导入 ${n} 篇`);
+        if (dup) parts.push(`跳过重复 ${dup} 篇`);
+        if (annN) parts.push(`恢复批注 ${annN} 条`);
+        toast(parts.join('，') || '没有可导入的内容');
       } catch (e) { toast('备份文件解析失败'); }
     };
     fr.readAsText(file);

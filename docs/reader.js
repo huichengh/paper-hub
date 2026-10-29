@@ -29,6 +29,19 @@
   let pending = null;    // 待保存的选区
   let filterT = '';
   let editingId = null;
+  // 共用测量画布：文字层按 PDF 实际宽度校准，避免逐 span 读布局造成卡顿
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  // 矩阵相乘，与 pdf.js Util.transform(viewport.transform, item.transform) 等价
+  function transform(m1, m2) {
+    return [
+      m1[0] * m2[0] + m1[2] * m2[1],
+      m1[1] * m2[0] + m1[3] * m2[1],
+      m1[0] * m2[2] + m1[2] * m2[3],
+      m1[1] * m2[2] + m1[3] * m2[3],
+      m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+      m1[1] * m2[4] + m1[3] * m2[5] + m1[5]
+    ];
+  }
 
   function init(hooks) {
     api = hooks;
@@ -68,7 +81,10 @@
     // 选区变化时弹出气泡
     document.addEventListener('selectionchange', onSelChange);
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { if ($('pop').classList.contains('on')) closePop(); else if ($('reader').classList.contains('on')) close(); }
+      if (e.key !== 'Escape') return;
+      if ($('pop').classList.contains('on')) closePop();
+      else if ($('reader').classList.contains('rd-shooting')) endShot();
+      else if ($('reader').classList.contains('on')) close();
     });
   }
 
@@ -92,14 +108,18 @@
       doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
       $('rdTitle').textContent = `${p.title || '（无题目）'}　—　${doc.numPages} 页`;
       await renderAll();
+      paint();          // 重新打开时恢复已有批注的高亮与序号徽标
       renderList();
+      $('rdLoading').classList.add('hide');
     } catch (e) {
+      // 出错时保留提示。此前无论成功失败都会 hide，用户只能看到空白页
       $('rdLoading').textContent = '无法打开该 PDF：' + (e && e.message ? e.message : e) +
         '。如果是从备份恢复的记录，PDF 原文件未一并保存，需重新上传。';
+      $('rdLoading').classList.remove('hide');
     }
-    $('rdLoading').classList.add('hide');
   }
   function close() {
+    endShot();
     $('reader').classList.remove('on');
     doc = null; pages = []; pending = null; editingId = null;
   }
@@ -137,24 +157,30 @@
 
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
 
-    // 文字层：每个片段按其 transform 定位
+    // 文字层：必须把「页面 viewport 变换」与「文本片段 transform」相乘。
+    // 之前直接用 item.transform，既没有乘 1.4 缩放，也没有做 PDF 的 Y 轴翻转，
+    // 还把字号当成 scaleX，导致一段 5 个字被拉成 500 多像素，划词位置完全对不上。
     const tc = await page.getTextContent();
     tc.items.forEach((it, idx) => {
       if (!it.str || !it.str.trim()) return;
-      const tx = pdfjsLib ? null : null; // 占位，避免未使用告警
-      const tr = it.transform;
-      const fontH = Math.hypot(tr[2], tr[3]) || 10;
+      const tx = transform(viewport.transform, it.transform);
+      const fontH = Math.hypot(tx[2], tx[3]) || 10;
+      const angle = Math.atan2(tx[1], tx[0]);
       const span = document.createElement('span');
       span.textContent = it.str;
       span.dataset.idx = String(idx);
-      const x = tr[4], y = tr[5] - fontH;
-      span.style.left = x + 'px';
-      span.style.top = y + 'px';
+      span.style.left = tx[4] + 'px';
+      span.style.top = (tx[5] - fontH) + 'px';
       span.style.fontSize = fontH + 'px';
-      span.style.fontFamily = it.fontName || 'sans-serif';
-      // pdf.js 的横向缩放矩阵在 transform[0] 里
-      const sx = tr[0] || 1;
-      span.style.transform = `scale(${sx}, 1)`;
+      span.style.fontFamily = 'sans-serif';
+      span.style.transformOrigin = '0 0';
+      // PDF 的 advance width 才是这段文字在页面上的真实宽度；
+      // 浏览器字体与 PDF 字体不同，需要单独校准横向比例。
+      const targetW = Math.max(0, (it.width || 0) * viewport.scale);
+      measureCtx.font = fontH + 'px sans-serif';
+      const actualW = measureCtx.measureText(it.str).width;
+      const sx = targetW > 0 && actualW > 0 ? targetW / actualW : 1;
+      span.style.transform = (Math.abs(angle) > 0.001 ? `rotate(${angle}rad) ` : '') + `scaleX(${sx})`;
       layer.appendChild(span);
       rec.spans.push({ el: span, item: it, idx });
     });
@@ -262,6 +288,7 @@
     const txt = $('popText').value.trim();
     const typeBtn = $('popTypes').querySelector('.lg.on');
     const type = typeBtn ? typeBtn.dataset.t : 'important';
+    const wasEdit = !!editingId;
     const list = api.getAnnotations(cur.id);
     if (editingId) {
       const a = list.find(x => x.id === editingId);
@@ -280,7 +307,7 @@
     window.getSelection().removeAllRanges();
     paint();
     renderList();
-    api.toast(editingId ? '批注已更新' : '批注已添加');
+    api.toast(wasEdit ? '批注已更新' : '批注已添加');
   }
 
   function delAnnotation(id) {
