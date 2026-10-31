@@ -1465,6 +1465,7 @@
       getSelected: () => [...sel],
       setView: v => switchView(v),
       save, toast,
+      openAiSettings: () => openAiCfg(),
       openEvidence: (id, anchor, quote) => window.ReaderMode.open(id, { focus: anchor, quote })
     };
   }

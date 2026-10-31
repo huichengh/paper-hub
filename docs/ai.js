@@ -54,6 +54,11 @@
       keyless: true, note: '本地开源权重；无需 Key，需先启动 Ollama 并允许跨域'
     },
     {
+      name: 'DeepSeek R1 · 本地 llama.cpp',
+      base: 'http://127.0.0.1:8080/v1', model: 'deepseek-r1-7b',
+      keyless: true, note: 'llama.cpp llama-server；无需 Key，需用 --cors 启动并加载 GGUF'
+    },
+    {
       name: 'DeepSeek R1 · 自托管 vLLM',
       base: 'http://localhost:8000/v1', model: 'deepseek-r1',
       keyless: true, note: 'vLLM / SGLang 等 OpenAI 兼容服务；无鉴权时可留空 Key'
@@ -109,6 +114,12 @@
       if (!/reasoner|deepseek-r1/i.test(cfg.model)) {
         body.temperature = opts && opts.temperature != null ? opts.temperature : 0.2;
       }
+      // 本地 llama.cpp / Ollama 对 response_format=json_object 支持较好；
+      // 官方 deepseek-reasoner 不强行传，避免接口拒绝，仍靠解析器兜底。
+      const local = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(base);
+      if (opts && opts.json && (local || !/reasoner/i.test(cfg.model))) {
+        body.response_format = { type: 'json_object' };
+      }
       const resp = await fetch(base + '/chat/completions', {
         method: 'POST',
         headers,
@@ -136,7 +147,10 @@
   }
 
   async function chatJSON(prompt, opts) {
-    const r = await chat([{ role: 'user', content: prompt }], opts);
+    const messages = [];
+    if (opts && opts.system) messages.push({ role: 'system', content: String(opts.system) });
+    messages.push({ role: 'user', content: prompt });
+    const r = await chat(messages, opts);
     if (!r.ok) return r;
     const obj = parseJsonLoose(r.content);
     if (!obj) return { ok: false, error: '返回不是合法 JSON', raw: r.content.slice(0, 500) };

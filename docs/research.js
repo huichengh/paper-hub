@@ -173,6 +173,8 @@
     if (c.page) head.appendChild(pill('第 ' + c.page + ' 页', 'evidence'));
     // 证据状态必须可见：从 PDF 选区来的有锚点，手工摘录只能算待核对
     if (c.anchor) head.appendChild(pill('原文锚点', 'confirmed'));
+    else if (c.source === 'ai' && c.quoteStatus === 'sentence') head.appendChild(pill('AI 候选句 · 待核对', 'unconfirmed'));
+    else if (c.source === 'ai' && c.quote && c.quoteStatus === 'aligned') head.appendChild(pill('AI 概括 · 原文自动对齐', 'unconfirmed'));
     else if (c.source === 'ai' && c.quote) head.appendChild(pill('AI 引文已校验 · 无锚点', 'evidence'));
     else if (c.quote) head.appendChild(pill('人工摘录 · 待核对', 'unconfirmed'));
     else head.appendChild(pill('无原文证据', 'unknown'));
@@ -257,7 +259,47 @@
     return false;
   }
 
-  // AI 观点抽取：只接受能在逐页全文中逐字校验到的 quote
+  // 把页面文本切成可引用的候选句，避免模型自由生成 quote
+  function pageSentences(text) {
+    let flat = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!flat) return [];
+    // 有中文摘要时从摘要开始，避开标题、作者、期刊页眉
+    const abs = flat.search(/【?\s*摘\s*要\s*】?|内容摘要/);
+    if (abs > 0 && abs < flat.length - 60) flat = flat.slice(abs);
+    let parts = flat.split(/(?<=[。！？；!?;])\s*/).map(x => x.trim()).filter(Boolean);
+    const out = [];
+    parts.forEach(p => {
+      const zh = (p.match(/[\u4e00-\u9fa5]/g) || []).length;
+      if (zh < 8 || zh / Math.max(1, p.length) < 0.35) return;
+      if (/关键词|关键字|Keywords|Abstract|中图分类号|文献标识码|DOI|作者简介|收稿日期|基金项目|参考文献/i.test(p)) return;
+      if (p.length <= 170) { if (p.length >= 18) out.push(p); return; }
+      // 超长句按逗号切成 60–150 字的片段，保留原文顺序
+      let rest = p;
+      while (rest.length > 150) {
+        let cut = -1;
+        for (let i = 120; i >= 50; i--) {
+          if ('，,、'.includes(rest[i])) { cut = i + 1; break; }
+        }
+        if (cut < 0) cut = 120;
+        const seg = rest.slice(0, cut).trim();
+        if (seg.length >= 18) out.push(seg);
+        rest = rest.slice(cut);
+      }
+      if (rest.trim().length >= 18) out.push(rest.trim());
+    });
+    return out.slice(0, 14);
+  }
+
+  function stanceOf(s) {
+    const t = String(s || '').toLowerCase();
+    if (['support', 'oppose', 'conditional', 'unknown'].includes(t)) return t;
+    if (/支持|赞同/.test(t)) return 'support';
+    if (/反对|质疑|冲突/.test(t)) return 'oppose';
+    if (/条件|限定|边界/.test(t)) return 'conditional';
+    return 'unknown';
+  }
+
+  // AI 观点抽取：按页提供候选句，模型只能选句子编号，不自由生成 quote
   async function aiExtractClaims() {
     if (!window.PaperAI || !window.PaperAI.isReady()) {
       toast('先配置 DeepSeek R1（顶栏 AI 设置）');
@@ -273,81 +315,81 @@
       toast('没有已抽取全文的文献；先在文献库勾选并点「全文抽取」');
       return;
     }
-    list = list.slice(0, 3);
+    list = list.slice(0, 2);
     const cfg = window.PaperAI.getCfg();
-    // 取第一篇第一页做发送预览
     let preview = '';
-    try {
-      const rows = await window.PaperDB.getPageTexts(list[0].id);
-      preview = ((rows[0] && rows[0].text) || '').replace(/\s+/g, ' ').slice(0, 500);
-    } catch (e) { }
+    let firstRows = [];
+    try { firstRows = await window.PaperDB.getPageTexts(list[0].id); } catch (e) { }
+    const firstSents = pageSentences((firstRows[0] && firstRows[0].text) || '');
+    preview = firstSents.slice(0, 3).join('\n');
     if (!preview) { toast('全文页文本为空，无法发送'); return; }
     if (!confirm(
-      `将把 ${list.length} 篇论文的前 12 页全文发送到：\n${cfg.base || 'OpenAI 兼容接口'} / ${cfg.model}\n\n` +
-      `片段预览：\n${preview}…\n\n模型只被允许输出能在原文中逐字匹配的 quote；匹配失败的条目会被丢弃。是否继续？`
+      `将把 ${list.length} 篇论文前 6 页的候选句发送到：\n${cfg.base || 'OpenAI 兼容接口'} / ${cfg.model}\n\n` +
+      `候选句预览：\n${preview.slice(0, 500)}…\n\n模型只能选择给定句子编号；返回不存在的编号会被丢弃。是否继续？`
     )) return;
 
     let added = 0, rejected = 0, failed = 0;
-    for (let i = 0; i < list.length; i++) {
-      const p = list[i];
-      let rows = [];
-      try { rows = await window.PaperDB.getPageTexts(p.id); } catch (e) { rows = []; }
-      rows = rows.filter(r => r.page <= 12 && r.text && r.text.trim());
-      if (!rows.length) { failed++; continue; }
-      const material = rows.map(r => `[第${r.page}页]\n${r.text}`).join('\n\n').slice(0, 22000);
-      const prompt = `你是严谨的学术观点抽取器。只依据下面带页码的论文原文，抽取作者明确表达的观点/结论，不得补充常识、不得编造。
+    const btn = $('btnClaimAi');
+    const oldLabel = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'AI 抽取中…'; }
+    try {
+      for (let pi = 0; pi < list.length; pi++) {
+        const p = list[pi];
+        let rows = [];
+        try { rows = await window.PaperDB.getPageTexts(p.id); } catch (e) { rows = []; }
+        rows = rows.filter(r => r.page <= 6 && r.text && r.text.trim());
+        for (const row of rows) {
+          const sents = pageSentences(row.text);
+          if (!sents.length) continue;
+          const numbered = sents.map((s, i) => `[${i}] ${s}`).join('\n');
+          const prompt = `下面是论文第 ${row.page} 页的候选句。请只从这些句子中选出作者明确表达的观点/结论，最多 3 条。
 
 输出严格 JSON：
-{"claims":[{"claim":"用一句中文概括作者观点","stance":"support|oppose|conditional|unknown","page":页码整数,"quote":"从该页原文逐字复制的连续片段，10-180字","object":"研究对象","scope":"适用条件","method":"研究方法或证据类型"}]}
+{"claims":[{"claim":"用一句中文概括作者观点","sentence":候选句编号整数,"stance":"support|oppose|conditional|unknown"}]}
 
 规则：
-1. quote 必须是所给页面中逐字存在的连续文字，不能改写、不能拼接不同段落。
-2. 找不到明确原文时输出 {"claims":[]}，不要为了凑数编造。
-3. stance 只表示作者对自己结论的立场：support=支持某做法/结论，oppose=反对/质疑，conditional=有条件下成立，unknown=无法判断。
-4. 最多 8 条，按重要性排序；claim 不要照抄 quote。
-5. 只输出 JSON，不要解释。
+1. sentence 必须是下面列表中的编号，不能编造；不能输出列表外的内容。
+2. claim 是概括，不要照抄整句；不要补充原文没有的结论。
+3. 没有明确观点就输出 {"claims":[]}。
+4. 只输出 JSON，不要解释。
 
-论文题目：${p.title || p.fileName || ''}
-${material}
-
-请输出 JSON：`;
-      const r = await window.PaperAI.chatJSON(prompt, { max_tokens: 2400, temperature: 0.1 });
-      if (!r.ok) { failed++; continue; }
-      const arr = r.data && Array.isArray(r.data.claims) ? r.data.claims : [];
-      const norm = s => String(s || '').replace(/[\s\u3000\p{P}\p{S}]/gu, '').toLowerCase();
-      const pageMap = new Map(rows.map(x => [Number(x.page), x.text]));
-      arr.slice(0, 8).forEach(it => {
-        if (!it || typeof it.claim !== 'string' || typeof it.quote !== 'string') { rejected++; return; }
-        const claimText = it.claim.trim();
-        let quote = it.quote.trim();
-        if (!claimText || quote.length < 8 || quote.length > 300) { rejected++; return; }
-        let page = parseInt(it.page, 10) || 0;
-        let pageText = pageMap.get(page) || '';
-        // 页码不对时，允许在已提供的页里按 quote 找回正确页；找不回就丢弃
-        if (!pageText || !norm(pageText).includes(norm(quote))) {
-          const found = rows.find(r => norm(r.text).includes(norm(quote)));
-          if (!found) { rejected++; return; }
-          page = found.page; pageText = found.text;
+候选句：
+${numbered}`;
+          const r = await window.PaperAI.chatJSON(prompt, {
+            max_tokens: 1200, temperature: 0.1, timeout: 180000, json: true,
+            system: '你是严谨的中文文献分析助手。只输出严格 JSON 对象，不要 markdown，不要解释。'
+          });
+          if (!r.ok) { failed++; continue; }
+          const arr = r.data && Array.isArray(r.data.claims) ? r.data.claims : [];
+          for (const it of arr.slice(0, 3)) {
+            if (!it || typeof it.claim !== 'string') { rejected++; continue; }
+            const claimText = it.claim.trim();
+            let idx = parseInt(it.sentence, 10);
+            if (!Number.isInteger(idx) || idx < 0 || idx >= sents.length) { rejected++; continue; }
+            const quote = sents[idx];
+            if (!claimText || !quote) { rejected++; continue; }
+            if (claims().some(c => c.paperId === p.id && c.page === row.page && c.quote === quote)) { rejected++; continue; }
+            claims().push({
+              id: uid('c'), question: question(), text: claimText, stance: stanceOf(it.stance),
+              object: String(it.object || conditions().object || '').slice(0, 120),
+              scope: String(it.scope || conditions().context || '').slice(0, 160),
+              method: String(it.method || '').slice(0, 120),
+              paperId: p.id, page: row.page, quote: quote.slice(0, 1000), anchor: null,
+              evidenceId: uid('ev'), confirmed: false, source: 'ai', quoteStatus: 'sentence',
+              aiModel: r.model || cfg.model,
+              createdAt: nowIso(), updatedAt: nowIso()
+            });
+            added++;
+          }
         }
-        if (claims().some(c => c.paperId === p.id && String(c.page) === String(page) && norm(c.quote) === norm(quote))) { rejected++; return; }
-        const stance = ['support', 'oppose', 'conditional', 'unknown'].includes(it.stance) ? it.stance : 'unknown';
-        claims().push({
-          id: uid('c'), question: question(), text: claimText, stance,
-          object: String(it.object || conditions().object || '').slice(0, 120),
-          scope: String(it.scope || conditions().context || '').slice(0, 160),
-          method: String(it.method || '').slice(0, 120),
-          paperId: p.id, page, quote: quote.slice(0, 1000), anchor: null,
-          evidenceId: uid('ev'), confirmed: false, source: 'ai',
-          aiModel: r.model || cfg.model,
-          createdAt: nowIso(), updatedAt: nowIso()
-        });
-        added++;
-      });
+      }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = oldLabel || 'AI 抽取观点'; }
     }
     save(); renderAll();
     let msg = `AI 观点：新增 ${added} 条`;
-    if (rejected) msg += `，丢弃 ${rejected} 条（quote 未通过原文校验）`;
-    if (failed) msg += `，${failed} 篇失败/无全文`;
+    if (rejected) msg += `，丢弃 ${rejected} 条（编号无效或重复）`;
+    if (failed) msg += `，${failed} 页调用失败`;
     toast(msg);
   }
 

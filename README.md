@@ -29,6 +29,7 @@
 - **研究方案生成器**：从研究机会或手工创建；字段包括研究目标、问题、对象/范围、理论框架、候选方法、变量/指标、数据需求、实施步骤、预期贡献、风险/缺失证据。
 - **字段级来源标记**：每个板块标注「来自文献 / 基于文献的推断 / 我手工填写」；未确认方案显示“建议草案”，可标记为人工确认。
 - **方法比较**：至少两种候选方法，按适用前提、局限、数据需求、成本/可行性并列；不生成专家评分或伪造调研数据。
+- **AI 补全草案**：可调用 DeepSeek R1 补空字段、方法比较与变量指标；发送前确认，只补空字段，不覆盖手工内容，所有补入内容标“基于文献的推断”。
 - **版本与导出**：保存新版本（最多保留 10 个历史快照），导出 Markdown / JSON。
 - **论文证据链审计**：粘贴综述/开题段落，按中文句号、分号、换行拆句；用库内观点与原文摘录做本地 n-gram 匹配，给出支持/部分支持/冲突/未找到证据的机器初判。
 - **人工复核**：每条结论可改判、复制审阅意见、点击证据回跳 PDF；明确“未找到证据不等于结论错误”，不自动修改原文。
@@ -91,6 +92,7 @@ python -m http.server 8823
 |---|---|---|---|
 | DeepSeek R1 官方 API | `https://api.deepseek.com/v1` | `deepseek-reasoner` | 需要 |
 | 本地 Ollama | `http://localhost:11434/v1` | `deepseek-r1:7b`（或 14b/32b） | 可留空 |
+| 本地 llama.cpp | `http://127.0.0.1:8080/v1` | `deepseek-r1-7b` | 可留空 |
 | 自托管 vLLM / SGLang | `http://localhost:8000/v1` | `deepseek-r1` | 视服务而定 |
 
 Ollama 示例：
@@ -100,15 +102,26 @@ ollama pull deepseek-r1:7b
 OLLAMA_ORIGINS=* ollama serve
 ```
 
-注意：GitHub Pages 是 HTTPS，浏览器可能拦截对 `http://localhost` 的请求；本地模型建议直接本地打开 `docs/index.html` 或本地 HTTP 服务，并开启 Ollama 的 CORS。R1 的 `think` 段会被剥离后再解析 JSON；`deepseek-reasoner` 不发送 temperature 参数。
+llama.cpp 示例（本机已装 `ggml.llamacpp` + `deepseek-r1-7b-q4km.gguf` 时）：
 
-AI 目前用于：元数据字段抽取、按全文抽取带原文引用的观点（quote 必须逐字匹配，否则丢弃）、答辩追问。所有结果都标为待人工确认。
+```bash
+llama-server -m models/deepseek-r1-7b-q4km.gguf \
+  --alias deepseek-r1-7b --host 127.0.0.1 --port 8080 -c 8192 -t 10
+```
+
+Windows 下可直接双击项目根目录的 `启动本地R1.bat`：启动 llama-server 和本地网页服务，然后打开 `http://127.0.0.1:8823/`。
+
+注意：GitHub Pages 是 HTTPS，浏览器可能拦截对 `http://localhost` 的请求；本地模型建议直接本地打开 `docs/index.html` 或使用 `启动本地R1.bat`。R1 的 `think` 段会被剥离后再解析 JSON；`deepseek-reasoner` 不发送 temperature 参数；本地接口使用 `response_format=json_object` 提高 JSON 稳定性。
+
+本机实测使用的是 **DeepSeek-R1-Distill-Qwen-7B Q4_K_M**（4.4GB 蒸馏版），不是 671B 全量权重；能力有限，适合验证流程，不等同于官方 R1 的推理质量。
+
+AI 目前用于：元数据字段抽取、按页候选句抽取观点（模型只能选句子编号，不自由生成 quote）、答辩追问。所有结果都标为待人工确认。
 
 ## 已知限制（未完成项）
 
-- **P2 未接 AI 与 DOCX**：研究方案/证据审计为本地规则与手工路径；导出为 Markdown/JSON，未生成 DOCX。
-- **P3 仅实现本地与 AI 追问**：答辩追问可选 R1；跨学科迁移只从库内方法记录提取，未接外部检索；文献可信度只显示“未核验”+ Crossref 搜索入口，没有 DOI/撤稿 API。
-- **AI 观点抽取只读前 12 页**：更靠后的章节不会被抽取； quote 校验通过不代表观点概括一定准确，仍需人工核对。
+- **P2 已接 AI 草案，DOCX 未接**：研究方案可 AI 补全，证据审计仍为本地规则；导出为 Markdown/JSON，未生成 DOCX。
+- **P3 已实现本地与 AI 追问，外部核验受限**：答辩追问可选 R1；跨学科迁移只从库内方法记录提取，未接外部检索；文献可信度可查 Crossref 候选 DOI，但不判定质量或撤稿。
+- **AI 观点抽取只读前 6 页、每页最多 3 条**：更靠后的章节不会被抽取；模型只能选候选句编号，但仍可能把方法描述误当结论，必须人工核对。
 - **证据审计是 n-gram 初判，不是语义判断**：可能漏匹配或误匹配，必须人工改判；不把“未找到证据”等同于结论错误。
 - 扫描件 / 无文字层 PDF 只能手工录入或先 OCR。
 - 全文抽取是逐页文本，不生成向量索引或语义检索；`pageTexts` 供后续证据检索/审计使用。
@@ -127,9 +140,9 @@ AI 目前用于：元数据字段抽取、按全文抽取带原文引用的观�
 - P2：机会转研究方案、两种方法比较、方案保存/版本/导出；证据审计拆句、支持/部分支持/冲突/缺证初判、人工改判、证据回跳、Markdown 导出；
 - P3 本地版：14 个答辩追问、回答加入待办、方案缺口生成 6 项待办、方法迁移状态/边界保存、可信度未核验列表、纪要导出；
 - 原有 21 项对比、批注、Excel 导出、备份 v4；
-- AI mock：密钥不落 localStorage、发送前预览、手工字段不被覆盖；DeepSeek R1 `deepseek-reasoner` 的 think 段剥离、keyless 本地模式、AI 观点引文逐字校验（伪造 quote 被丢弃）、AI 答辩追问。
+- AI：DeepSeek R1 官方 `deepseek-reasoner` 的 think 段剥离与请求参数校验（mock）；本地 DeepSeek-R1-Distill-Qwen-7B 真实运行：连接成功、按页抽取观点、生成 12 条答辩追问、生成研究方案草案；keyless 请求不带 Authorization。
 
-未执行：真实第三方 AI 接口调用、AI 虚拟导师、外部 DOI/撤稿核验、真实大样本全文语义匹配压测。
+未执行：真实官方 DeepSeek API（没有 Key）、671B 全量 R1、外部 DOI/撤稿核验、真实大样本全文语义匹配压测。
 
 ## 说明
 

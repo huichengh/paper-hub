@@ -419,6 +419,80 @@
     toast('已生成研究方案草案，请补全方法与数据');
   }
 
+  async function aiDraft() {
+    const p = currentProject;
+    if (!p) { toast('先选择一份研究方案'); return; }
+    if (!window.PaperAI || !window.PaperAI.isReady()) {
+      toast('先配置 DeepSeek R1（顶栏 AI 设置）');
+      if (api.openAiSettings) api.openAiSettings();
+      return;
+    }
+    const cfg = window.PaperAI.getCfg();
+    const linked = (p.claimIds || []).map(claimById).filter(Boolean);
+    const ctx = {
+      题目: p.title, 研究问题: p.question, 研究对象: p.scope,
+      已有目标: p.objective, 已有方法: (p.methods || []).filter(m => m.name),
+      库内观点: linked.slice(0, 8).map(c => ({ 主张: c.text, 立场: c.stance, 页码: c.page, 原文: (c.quote || '').slice(0, 180) }))
+    };
+    const ctxText = JSON.stringify(ctx);
+    if (!confirm(
+      `将把研究方案与 ${linked.length} 条库内观点发送到：\n${cfg.base || 'OpenAI 兼容接口'} / ${cfg.model}\n\n` +
+      `预览：${ctxText.slice(0, 520)}…\n\nAI 只会补空字段，不会覆盖你已写的内容；是否继续？`
+    )) return;
+    const prompt = `你是应用研究型硕士的研究设计导师。只能使用给出的方案与库内观点，不得编造文献、作者、页码、引文或调研数据。请补全一份可执行的研究蓝图草案。
+
+严格输出 JSON：
+{"objective":"研究目标","researchQuestions":["主问题","子问题1","子问题2"],"framework":"理论框架及使用方式","methods":[{"name":"方法","applicability":"适用前提","limitation":"局限","data":"数据需求","cost":"成本/可行性"}],"variables":[{"name":"变量","type":"类型","measure":"测量方式"}],"dataNeeds":"数据来源与样本","steps":"实施步骤","contribution":"预期贡献（理论/实践）","risks":"风险、限制与推广边界","missingEvidence":"待补证据"}
+
+规则：
+1. 只做研究设计建议，不写研究结论，不声称“填补空白”。
+2. 至少两种候选方法，不伪造专家评分或调研数据。
+3. 变量必须能落到可获得的数据；无法确定的写“待验证”。
+4. 如果材料不足，在 missingEvidence 中说明，不要编造。
+5. 只输出 JSON，不要解释。
+
+材料：
+${ctxText.slice(0, 12000)}
+
+请输出 JSON：`;
+    const r = await window.PaperAI.chatJSON(prompt, { max_tokens: 2600, temperature: 0.3, timeout: 300000, json: true, system: '你是应用研究型硕士的研究设计导师。只输出严格 JSON 对象，不要 markdown，不要解释；所有内容用中文。' });
+    if (!r.ok) { toast('AI 补全失败：' + r.error); return; }
+    const d = r.data || {};
+    const str = v => typeof v === 'string' ? v.trim() : '';
+    const arr = v => Array.isArray(v) ? v : [];
+    const methods = arr(d.methods).map(m => ({
+      id: uid('m'), name: str(m && m.name), applicability: str(m && m.applicability),
+      limitation: str(m && m.limitation), data: str(m && m.data), cost: str(m && m.cost), source: 'inference'
+    })).filter(m => m.name).slice(0, 4);
+    const variables = arr(d.variables).map(v => ({
+      id: uid('v'), name: str(v && v.name), type: str(v && v.type), measure: str(v && v.measure), source: 'inference'
+    })).filter(v => v.name || v.measure).slice(0, 10);
+    // 只补空字段；已有内容保留
+    if (!p.objective && str(d.objective)) p.objective = str(d.objective);
+    if (!p.researchQuestions && arr(d.researchQuestions).length) p.researchQuestions = arr(d.researchQuestions).map(str).filter(Boolean).map((x, i) => (i ? '子问题' + i + '：' : '主问题：') + x).join('\n');
+    if (!p.framework && str(d.framework)) p.framework = str(d.framework);
+    const existingMethods = (p.methods || []).filter(m => m.name);
+    if (existingMethods.length < 2 && methods.length) {
+      p.methods = existingMethods.concat(methods.slice(0, 2 - existingMethods.length));
+    }
+    if (!(p.variables || []).length && variables.length) p.variables = variables;
+    if (!p.dataNeeds && str(d.dataNeeds)) p.dataNeeds = str(d.dataNeeds);
+    if (!p.steps && str(d.steps)) p.steps = str(d.steps);
+    if (!p.contribution && str(d.contribution)) p.contribution = str(d.contribution);
+    if (!p.risks && str(d.risks)) p.risks = str(d.risks);
+    if (!p.missingEvidence && str(d.missingEvidence)) p.missingEvidence = str(d.missingEvidence);
+    p.sourceMap = p.sourceMap || {};
+    ['objective', 'questions', 'framework', 'methods', 'variables', 'data', 'steps', 'contribution', 'risks'].forEach(k => {
+      if (!p.sourceMap[k]) p.sourceMap[k] = 'inference';
+    });
+    p.aiDraft = { model: r.model || cfg.model, at: nowIso(), note: 'AI 补全草案；未覆盖已有字段，需人工核对' };
+    p.updatedAt = nowIso();
+    const i = projects().findIndex(x => x.id === p.id);
+    if (i >= 0) projects()[i] = p;
+    save(); renderDesignList(); renderEditor();
+    toast('AI 草案已补入空字段，请核对来源与方法');
+  }
+
   function exportProject(kind) {
     if (!currentProject) return;
     const p = readEditor();
@@ -685,6 +759,7 @@
       if (!arr.length) { toast('还没有研究机会卡片，先到「研究机会」生成'); api.setView('opportunities'); return; }
       createFromOpportunity(arr[0]);
     };
+    $('btnDesignAi').onclick = aiDraft;
     $('btnDesignExport').onclick = () => exportProject('md');
 
     $('btnAuditRun').onclick = runAudit;

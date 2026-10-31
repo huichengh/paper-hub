@@ -147,7 +147,7 @@ ${ctxText.slice(0, 12000)}
 
 请输出 JSON：`;
 
-    const r = await window.PaperAI.chatJSON(prompt, { max_tokens: 2200, temperature: 0.3 });
+    const r = await window.PaperAI.chatJSON(prompt, { max_tokens: 2200, temperature: 0.3, timeout: 300000, json: true, system: '你是应用研究型硕士的答辩导师。只输出严格 JSON 对象，不要 markdown，不要解释；所有问题用中文。' });
     if (!r.ok) { toast('AI 生成失败：' + r.error); return; }
     const arr = r.data && Array.isArray(r.data.questions) ? r.data.questions : null;
     if (!arr || !arr.length) { toast('AI 没有返回可用问题，已保留本地追问'); return; }
@@ -297,6 +297,44 @@ ${ctxText.slice(0, 12000)}
   }
 
   // ---------- 可信度 ----------
+  async function lookupCrossref(project, paper, trigger) {
+    if (!paper || !paper.title) { toast('这篇文献没有标题，无法查询'); return; }
+    const old = trigger.textContent;
+    trigger.textContent = '查询中…';
+    trigger.style.pointerEvents = 'none';
+    try {
+      const q = encodeURIComponent((paper.title || '') + ' ' + (paper.authors || ''));
+      const url = 'https://api.crossref.org/works?query.bibliographic=' + q + '&rows=3&select=DOI,title,author,published,container-title,type';
+      const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!r.ok) throw new Error('Crossref HTTP ' + r.status);
+      const data = await r.json();
+      const items = (data.message && data.message.items) || [];
+      project.credibility = project.credibility || {};
+      if (!items.length) {
+        project.credibility[paper.id] = { status: 'not_found', at: nowIso() };
+        patchCurrent({ credibility: project.credibility });
+        toast('Crossref 未找到候选；这不代表文献不存在或不可信');
+        renderCredibility();
+        return;
+      }
+      const it = items[0];
+      const title = Array.isArray(it.title) ? it.title[0] : (it.title || '');
+      const year = it.published && it.published['date-parts'] && it.published['date-parts'][0] && it.published['date-parts'][0][0];
+      project.credibility[paper.id] = {
+        status: 'candidate', doi: it.DOI, title: title || '',
+        year: year || '', container: Array.isArray(it['container-title']) ? it['container-title'][0] : (it['container-title'] || ''),
+        at: nowIso(), note: 'Crossref 返回的候选，需人工比对标题/作者/年份，不代表质量或撤稿核验'
+      };
+      patchCurrent({ credibility: project.credibility });
+      toast('Crossref 返回候选，请人工比对；平台不判定质量或撤稿');
+      renderCredibility();
+    } catch (e) {
+      toast('Crossref 查询失败：' + (e.message || e) + '；文献仍为未核验');
+      trigger.textContent = old;
+      trigger.style.pointerEvents = '';
+    }
+  }
+
   function renderCredibility() {
     const p = current(); const box = $('asCredibility');
     if (!box) return;
@@ -305,15 +343,29 @@ ${ctxText.slice(0, 12000)}
     const list = ids.map(paperById).filter(Boolean);
     if (!list.length) { box.appendChild(el('div', 'mini', '方案还没有关联文献，无法列出可信度状态。')); return; }
     list.forEach(pp => {
+      const rec = p.credibility && p.credibility[pp.id];
       const d = el('div', 'cred');
       const c = el('div', 'ct');
       c.appendChild(el('b', null, pp.title || pp.fileName || '未命名'));
       c.appendChild(el('span', null, (pp.authors || '') + ' · ' + (pp.year || '') + ' · ' + (pp.source || pp.school || '来源未识别')));
+      if (rec && rec.doi) {
+        const line = el('span', null, '候选 DOI：');
+        const a = document.createElement('a');
+        a.href = 'https://doi.org/' + encodeURIComponent(rec.doi);
+        a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.textContent = rec.doi;
+        line.appendChild(a);
+        c.appendChild(line);
+      }
       d.appendChild(c);
-      d.appendChild(el('span', 'unv', '未核验'));
+      d.appendChild(el('span', 'unv', rec && rec.doi ? '候选，需人工确认' : '未核验'));
+      const q = el('span', 'ev-link', rec && rec.doi ? '重新查询' : 'Crossref 查询');
+      q.title = '按标题/作者查询 Crossref；结果只是候选，不代表撤稿或质量核验';
+      q.onclick = () => lookupCrossref(p, pp, q);
+      d.appendChild(q);
       const a = document.createElement('a');
       a.href = 'https://search.crossref.org/?q=' + encodeURIComponent((pp.title || '') + ' ' + (pp.authors || ''));
-      a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'Crossref 检索';
+      a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = '打开检索页';
       d.appendChild(a);
       box.appendChild(d);
     });
