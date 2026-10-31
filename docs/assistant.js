@@ -67,7 +67,7 @@
     const add = (cat, text) => {
       const t = String(text || '').trim();
       if (!t || qs.some(x => x.text === t)) return;
-      qs.push({ id: 'q' + hash(t), cat, text: t });
+      qs.push({ id: 'q' + hash(t), cat, text: t, source: 'local' });
     };
     add('研究定位', p.question
       ? `你的研究问题“${short(p.question, 60)}”是否具体到可以被数据回答？如果只能回答“有关系”，它还算研究问题吗？`
@@ -105,6 +105,69 @@
     toast(qs.length ? `已生成 ${Math.min(qs.length, 14)} 个追问` : '缺少可生成问题的方案内容');
   }
 
+  async function aiQuestions() {
+    const p = current(); if (!p) { toast('先创建研究方案'); return; }
+    if (!window.PaperAI || !window.PaperAI.isReady()) {
+      toast('先配置 DeepSeek R1（顶栏 AI 设置）');
+      if (api.openAiSettings) api.openAiSettings();
+      return;
+    }
+    const cfg = window.PaperAI.getCfg();
+    const linked = (p.claimIds || []).map(claimById).filter(Boolean);
+    const context = {
+      研究方案: {
+        题目: p.title, 研究问题: p.question, 目标: p.objective,
+        子问题: p.researchQuestions, 对象: p.scope,
+        理论框架: p.framework,
+        方法: (p.methods || []).filter(m => m.name).map(m => ({ 名称: m.name, 适用前提: m.applicability, 局限: m.limitation, 数据: m.data })),
+        数据需求: p.dataNeeds, 风险: p.risks, 待补证据: p.missingEvidence
+      },
+      库内观点: linked.slice(0, 8).map(c => ({
+        主张: c.text, 立场: c.stance, 页码: c.page, 原文: (c.quote || '').slice(0, 220)
+      }))
+    };
+    const ctxText = JSON.stringify(context);
+    const preview = ctxText.slice(0, 520);
+    if (!confirm(
+      `将把研究方案与 ${linked.length} 条库内观点发送到：\n` +
+      `${cfg.base || 'OpenAI 兼容接口'} / ${cfg.model}\n\n` +
+      `发送内容预览：\n${preview}…\n\n是否继续？`
+    )) return;
+
+    const prompt = `你是应用研究型硕士的答辩导师。只能使用下面给出的“研究方案”和“库内观点”，不得新增文献、作者、页码、引文或研究结论。请围绕创新性、研究问题与目标的一致性、方法适配、变量与因果、数据可得性、结论推广边界，提出 8–12 个具体、尖锐但有建设性的追问。
+
+要求：
+1. 每个问题必须能由研究者用其方案或数据回答，不要泛泛而谈。
+2. 如果库内存在相反/条件不同观点，至少提出一个关于条件差异的问题。
+3. 不要复述方案原文作为问题，不要编造“已有研究表明”。
+4. 严格输出 JSON：{"questions":[{"category":"方法/数据/创新性/证据边界/推广","text":"问题"}]}
+
+材料：
+${ctxText.slice(0, 12000)}
+
+请输出 JSON：`;
+
+    const r = await window.PaperAI.chatJSON(prompt, { max_tokens: 2200, temperature: 0.3 });
+    if (!r.ok) { toast('AI 生成失败：' + r.error); return; }
+    const arr = r.data && Array.isArray(r.data.questions) ? r.data.questions : null;
+    if (!arr || !arr.length) { toast('AI 没有返回可用问题，已保留本地追问'); return; }
+    p.advisor = p.advisor || { answers: {} };
+    const existing = p.advisor.questions || [];
+    const merged = existing.slice();
+    arr.forEach(q => {
+      const text = String(q && q.text || '').trim();
+      if (text.length < 8 || text.length > 240) return;
+      if (merged.some(x => x.text === text)) return;
+      merged.push({ id: 'q' + hash(text), cat: String(q.category || 'AI 追问'), text, source: 'ai' });
+    });
+    p.advisor.questions = merged.slice(0, 18);
+    p.advisor.generatedAt = nowIso();
+    p.advisor.model = r.model || cfg.model;
+    patchCurrent({ advisor: p.advisor });
+    renderQuestions();
+    toast('已加入 AI 追问，仍需你逐条核对是否适用于本方案');
+  }
+
   function renderQuestions() {
     const p = current(); const box = $('asQuestions');
     if (!box) return;
@@ -119,7 +182,7 @@
     qs.forEach(q => {
       const d = el('div', 'as-q');
       d.appendChild(el('div', 'qt', q.text));
-      d.appendChild(el('div', 'qc', q.cat));
+      d.appendChild(el('div', 'qc', (q.source === 'ai' ? 'AI 建议 · ' : '本地模板 · ') + (q.cat || '追问')));
       const ta = document.createElement('textarea');
       ta.placeholder = '写下你的回答；没有答案就直接加入待办。';
       ta.value = answers[q.id] || '';
@@ -290,6 +353,7 @@
   function bind() {
     $('asProject').onchange = e => { currentId = e.target.value; renderAll(); };
     $('btnAsQuestions').onclick = generateQuestions;
+    $('btnAsAiQuestions').onclick = aiQuestions;
     $('btnAsExport').onclick = exportAssistant;
     $('btnAsTodoAdd').onclick = () => { const v = $('asTodoInput').value.trim(); if (!v) return toast('先写待办内容'); addTodo(v, '手动'); $('asTodoInput').value = ''; };
     $('asTodoInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('btnAsTodoAdd').click(); } });

@@ -733,6 +733,7 @@
       </div>
       <div class="ractions">
         <button class="btn primary" id="btnClaimNew">新建观点</button>
+        <button class="btn" id="btnClaimAi" title="用已配置的 DeepSeek R1 从全文抽取带原文引用的观点">AI 抽取观点</button>
         <button class="btn" id="btnClaimGuide">从检阅模式取观点</button>
       </div>
     </div>
@@ -862,7 +863,8 @@
       </div>
       <div class="ractions">
         <select id="asProject" title="选择研究方案"></select>
-        <button class="btn primary" id="btnAsQuestions">生成答辩问题</button>
+        <button class="btn primary" id="btnAsQuestions">本地生成追问</button>
+        <button class="btn" id="btnAsAiQuestions" title="调用已配置的 DeepSeek R1 生成追问">AI 生成追问</button>
         <button class="btn" id="btnAsExport">导出纪要</button>
       </div>
     </div>
@@ -929,12 +931,12 @@
 <!-- AI 设置弹窗 -->
 <div class="modal" id="aiModal">
   <div class="mbox" style="width:min(560px,94vw)">
-    <div class="mhead"><h3>AI 抽取设置</h3><button class="x" id="aiMX">×</button></div>
+    <div class="mhead"><h3>AI / DeepSeek R1 设置</h3><button class="x" id="aiMX">×</button></div>
     <div class="mbody">
       <div class="tip" style="margin-bottom:12px">
-        配置后，可把 PDF 的摘要与正文发给大模型，自动抽取研究背景、研究目的、研究方法、
-        亮点与创新点、主要结论、维度与因素、评价标准体系等字段。<br>
-        <b>注意：内容会发送到你配置的第三方服务，请自行确认是否可外发。</b>
+        支持 DeepSeek R1 官方 API（<code>deepseek-reasoner</code>）、本地 Ollama（<code>deepseek-r1:7b</code>）和自托管 vLLM。<br>
+        可用于元数据字段抽取、按全文抽取带原文引用的观点、答辩追问。<br>
+        <b>注意：启用后内容会离开本机；每次调用前平台会展示服务商、模型和片段预览，请自行确认。</b>
       </div>
       <div class="fgrid" style="grid-template-columns:1fr">
         <div class="fld"><label>服务商</label>
@@ -944,8 +946,8 @@
           <input type="text" id="aiBase" placeholder="https://api.deepseek.com/v1">
         </div>
         <div class="fld"><label>API Key</label>
-          <input type="password" id="aiKey" placeholder="sk-...">
-          <div class="hint">只保存在当前页面内存，刷新后需重新填写；不会写入代码、备份或服务器</div>
+          <input type="password" id="aiKey" placeholder="sk-...（本地 Ollama 可留空）">
+          <div class="hint" id="aiKeyHint">只保存在当前页面内存，刷新后需重新填写；不会写入代码、备份或服务器</div>
         </div>
         <div class="fld"><label>模型名</label>
           <input type="text" id="aiModel" placeholder="deepseek-chat">

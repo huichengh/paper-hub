@@ -320,6 +320,16 @@
   }
 
   // ---------- AI 设置与抽取 ----------
+  function aiKeyless() { return $('aiKey').dataset.keyless === '1'; }
+  function setAiPreset(pr) {
+    if (!pr) return;
+    if (pr.base) $('aiBase').value = pr.base;
+    if (pr.model) $('aiModel').value = pr.model;
+    $('aiKey').dataset.keyless = pr.keyless ? '1' : '';
+    $('aiKeyHint').textContent = pr.keyless
+      ? '本地开源模型可留空 Key。Ollama 需允许跨域（OLLAMA_ORIGINS=*）；GitHub Pages 的 HTTPS 页面访问 http://localhost 可能被浏览器拦截，建议本地打开页面使用。'
+      : '只保存在当前页面内存，刷新后需重新填写；不会写入代码、备份或服务器。';
+  }
   function openAiCfg() {
     const c = window.PaperAI.getCfg();
     const sel = $('aiPreset');
@@ -329,36 +339,36 @@
         o.value = String(i); o.textContent = p.name;
         sel.appendChild(o);
       });
-      sel.onchange = () => {
-        const pr = window.PaperAI.PRESETS[+sel.value];
-        if (pr.base) $('aiBase').value = pr.base;
-        if (pr.model) $('aiModel').value = pr.model;
-      };
+      sel.onchange = () => setAiPreset(window.PaperAI.PRESETS[+sel.value]);
     }
     $('aiBase').value = c.base || window.PaperAI.PRESETS[0].base;
     $('aiKey').value = c.key || '';
     $('aiModel').value = c.model || window.PaperAI.PRESETS[0].model;
-    $('aiStatus').textContent = '';
+    const match = window.PaperAI.PRESETS.findIndex(p => p.base === c.base && p.model === c.model);
+    if (match >= 0) sel.value = String(match);
+    $('aiKey').dataset.keyless = (c.keyless || (match >= 0 && window.PaperAI.PRESETS[match].keyless)) ? '1' : '';
+    if (match >= 0) setAiPreset(window.PaperAI.PRESETS[match]);
+    $('aiStatus').textContent = c.keyless ? '当前为本地/免 Key 模式' : '';
     $('aiModal').classList.add('on');
   }
   function saveAiCfg() {
     window.PaperAI.setCfg({
       base: $('aiBase').value.trim(), key: $('aiKey').value.trim(),
-      model: $('aiModel').value.trim()
+      model: $('aiModel').value.trim(), keyless: aiKeyless()
     });
     $('aiModal').classList.remove('on');
     toast('AI 设置已保存');
   }
   async function testAi() {
     saveAiCfgQuiet();
-    $('aiStatus').textContent = '正在测试…';
+    $('aiStatus').textContent = '正在测试…（R1 推理模型可能需要几十秒）';
     const r = await window.PaperAI.ping();
-    $('aiStatus').textContent = r.ok ? '✓ 连接成功，可以开始抽取' : '✗ ' + r.error;
+    $('aiStatus').textContent = r.ok ? '✓ 连接成功：' + (r.model || $('aiModel').value) : '✗ ' + r.error;
   }
   function saveAiCfgQuiet() {
     window.PaperAI.setCfg({
       base: $('aiBase').value.trim(), key: $('aiKey').value.trim(),
-      model: $('aiModel').value.trim()
+      model: $('aiModel').value.trim(), keyless: aiKeyless()
     });
   }
 
@@ -1437,6 +1447,7 @@
       save,
       toast,
       setView: v => switchView(v),
+      openAiSettings: () => openAiCfg(),
       openReader: id => window.ReaderMode.open(id),
       openEvidence: (id, anchor, quote) => window.ReaderMode.open(id, { focus: anchor, quote }),
       exportBackup
@@ -1468,6 +1479,7 @@
       getSelected: () => [...sel],
       setView: v => switchView(v),
       save, toast,
+      openAiSettings: () => openAiCfg(),
       openEvidence: (id, anchor, quote) => window.ReaderMode.open(id, { focus: anchor, quote })
     };
   }
