@@ -105,7 +105,9 @@
       const lib = await api.getLib();
       const buf = await api.getFileBuffer(p);
       $('rdLoading').textContent = '正在渲染 PDF…';
-      doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
+      // pdf.js 会转移并清空传入的 ArrayBuffer，必须先复制一份，
+      // 否则同一篇 PDF 关掉检阅再点第二次就打不开了（detached ArrayBuffer）
+      doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
       $('rdTitle').textContent = `${p.title || '（无题目）'}　—　${doc.numPages} 页`;
       await renderAll();
       paint();          // 重新打开时恢复已有批注的高亮与序号徽标
@@ -215,19 +217,20 @@
     selTimer = setTimeout(() => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.rangeCount) { if (!editingId) closePop(); return; }
-      // 选区必须落在 PDF 文字层内
+      // 选区两端都必须落在 PDF 文字层内。
+      // 跨页选择时 commonAncestorContainer 是页面容器，用「两端节点」判断才不会被误杀。
       const range = sel.getRangeAt(0);
-      const inLayer = !!(range.commonAncestorContainer &&
-        (range.commonAncestorContainer.nodeType === 1
-          ? range.commonAncestorContainer.closest('.txt-layer')
-          : range.commonAncestorContainer.parentElement &&
-            range.commonAncestorContainer.parentElement.closest('.txt-layer')));
-      if (!inLayer) { if (!editingId) closePop(); return; }
+      const inLayer = node => !!(node && (node.nodeType === 1
+        ? node.closest('.txt-layer')
+        : node.parentElement && node.parentElement.closest('.txt-layer')));
+      if (!inLayer(range.startContainer) || !inLayer(range.endContainer)) {
+        if (!editingId) closePop(); return;
+      }
       const rect = range.getBoundingClientRect();
       if (!rect || (!rect.width && !rect.height)) return;
       const spans = collectSpans(range);
       if (!spans.length) return;
-      pending = buildAnchor(spans, sel.toString());
+      pending = buildAnchor(spans, sel.toString(), range);
       openPop(rect, sel.toString());
     }, 220);
   }
@@ -247,13 +250,36 @@
     return out;
   }
 
-  // 生成锚点
-  function buildAnchor(spans, text) {
+  // 选区在某一段文字里的字符偏移量（跨 <mark> 也能算对）
+  function offsetIn(spanEl, container, offset) {
+    try {
+      const r = document.createRange();
+      r.selectNodeContents(spanEl);
+      r.setEnd(container, offset);
+      return r.toString().length;
+    } catch (e) { return null; }
+  }
+  // 生成锚点：除了「第几个片段」，还要记片段内的起止字符。
+  // 否则选中一个词，整段都会被标记。
+  function buildAnchor(spans, text, range) {
     const first = spans[0], last = spans[spans.length - 1];
+    let startOff = 0;
+    let endOff = (last.sp.item.str || '').length;
+    if (range) {
+      const so = offsetIn(first.sp.el, range.startContainer, range.startOffset);
+      const eo = offsetIn(last.sp.el, range.endContainer, range.endOffset);
+      if (so != null && so >= 0) startOff = so;
+      if (eo != null && eo >= 0) endOff = eo;
+    }
+    const full = (first.sp.item.str || '').length;
+    if (startOff > full) startOff = 0;
+    if (endOff <= startOff && spans.length === 1) endOff = full;
     return {
       page: first.rec.n,
-      startIdx: first.sp.idx, startOff: 0,
-      endIdx: last.sp.idx, endOff: (last.sp.item.str || '').length,
+      startIdx: first.sp.idx, startOff,
+      // 跨页选择时记下结束页，重绘时按页分段高亮
+      endPage: last.rec.n,
+      endIdx: last.sp.idx, endOff,
       text: text.slice(0, 500)
     };
   }
@@ -339,43 +365,11 @@
     const activeId = active ? active.dataset.id : null;
 
     list.forEach((a, ai) => {
+      try { paintAcross(a, activeId); } catch (e) { console.warn('高亮绘制失败', e); }
       const rec = pages[(a.page || 1) - 1];
       if (!rec) return;
-      const range = anchorToRange(a.anchor, rec);
-      if (!range) return;
-      // 用 mark 包裹命中的片段。surroundContents 在片段含多个子节点时会抛错，
-      // 因此改为「逐个子节点包裹」，并保持 span 元素本身不被替换（便于重复绘制与还原）。
-      try {
-        const hits = [];
-        rec.spans.forEach(sp => { if (range.intersectsNode(sp.el)) hits.push(sp); });
-        hits.forEach(sp => {
-          const el0 = sp.el;
-          if (!el0.isConnected) return;
-          const kids = Array.from(el0.childNodes);
-          const wrapAll = () => {
-            const m = document.createElement('mark');
-            m.className = 'ann t-' + (a.type || 'important') + (a.id === activeId ? ' active' : '');
-            m.dataset.aid = a.id;
-            m.onclick = ev => { ev.stopPropagation(); focusAnn(a.id); };
-            while (el0.firstChild) m.appendChild(el0.firstChild);
-            el0.appendChild(m);
-          };
-          if (kids.length === 1) wrapAll();
-          else if (kids.length > 1) {
-            // 片段被拆成多段（如换行符分离），整段一起高亮
-            wrapAll();
-          } else {
-            const m = document.createElement('mark');
-            m.className = 'ann t-' + (a.type || 'important');
-            m.dataset.aid = a.id;
-            m.textContent = el0.textContent;
-            el0.textContent = '';
-            el0.appendChild(m);
-          }
-        });
-      } catch (e) { console.warn('高亮绘制失败', e); }
 
-      // 序号徽标
+      // 序号徽标只挂在起始页
       try {
         const r2 = anchorToRange(a.anchor, rec);
         if (r2) {
@@ -392,16 +386,51 @@
     });
   }
 
-  // 锚点 -> Range
-  // 注意：span 内可能已包着 <mark>，因此必须用「文本节点」定位，不能用 span 元素 + 字符偏移
-  function firstTextNode(node) {
-    if (!node) return null;
-    if (node.nodeType === 3) return node;
-    for (let i = 0; i < node.childNodes.length; i++) {
-      const r = firstTextNode(node.childNodes[i]);
-      if (r) return r;
+  // 一条批注可能跨页：从起始页画到结束页，首尾页按记录的字符偏移截取，
+  // 中间页整页都算命中
+  function paintAcross(a, activeId) {
+    const an = a.anchor || {};
+    const sp = Math.max(1, +(an.page || a.page || 1));
+    const ep = Math.max(sp, +(an.endPage || an.page || a.page || 1));
+    for (let pn = sp; pn <= ep; pn++) {
+      const rec = pages[pn - 1];
+      if (!rec || !rec.spans.length) continue;
+      const idxs = rec.spans.map(s => +String(s.idx));
+      const lo = Math.min.apply(null, idxs);
+      const hi = Math.max.apply(null, idxs);
+      const isStart = pn === sp;
+      const isEnd = pn === ep;
+      const localAnchor = {
+        startIdx: isStart ? an.startIdx : String(lo),
+        startOff: isStart ? (an.startOff || 0) : 0,
+        endIdx: isEnd ? an.endIdx : String(hi),
+        endOff: isEnd ? an.endOff : null
+      };
+      paintAnn(rec, Object.assign({}, a, { anchor: localAnchor }), activeId);
     }
-    return null;
+  }
+
+  // 锚点 -> Range
+  // span 内可能已经包着别的 <mark>，所以必须按「文本节点 + 累计偏移」定位，
+  // 不能用 span 元素本身加字符偏移
+  function textLenOf(root) {
+    let n = 0;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let t;
+    while ((t = w.nextNode())) n += (t.nodeValue || '').length;
+    return n;
+  }
+  function nodeAtOffset(root, off) {
+    let remain = Math.max(0, off || 0);
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n, last = null;
+    while ((n = w.nextNode())) {
+      last = n;
+      const len = (n.nodeValue || '').length;
+      if (remain <= len) return { node: n, offset: remain };
+      remain -= len;
+    }
+    return last ? { node: last, offset: (last.nodeValue || '').length } : null;
   }
   function anchorToRange(anchor, rec) {
     if (!anchor) return null;
@@ -409,16 +438,70 @@
     const e = rec.spans.find(x => String(x.idx) === String(anchor.endIdx)) || s;
     if (!s) return null;
     try {
-      const st = firstTextNode(s.el);
-      const en = firstTextNode(e.el);
+      const sLen = textLenOf(s.el);
+      const eLen = textLenOf(e.el);
+      const st = nodeAtOffset(s.el, Math.min(anchor.startOff || 0, sLen));
+      const en = nodeAtOffset(e.el, Math.min(anchor.endOff != null ? anchor.endOff : eLen, eLen));
       if (!st || !en) return null;
-      const sLen = (st.nodeValue || '').length;
-      const eLen = (en.nodeValue || '').length;
       const r = document.createRange();
-      r.setStart(st, Math.min(anchor.startOff || 0, sLen));
-      r.setEnd(en, Math.min(anchor.endOff != null ? anchor.endOff : eLen, eLen));
+      r.setStart(st.node, st.offset);
+      r.setEnd(en.node, en.offset);
       return r;
     } catch (err) { return null; }
+  }
+
+  // 只给选区覆盖到的字符加高亮：先把每段文字拆成「命中区间」，
+  // 再用 Range.surroundContents 分段包 mark，这样同段里的多条批注不会嵌套整段
+  function paintAnn(rec, a, activeId) {
+    const an = a.anchor || {};
+    const s = rec.spans.find(x => String(x.idx) === String(an.startIdx));
+    const e = rec.spans.find(x => String(x.idx) === String(an.endIdx)) || s;
+    if (!s) return;
+    const i0 = +String(s.idx), i1 = +String(e.idx);
+    const lo = Math.min(i0, i1), hi = Math.max(i0, i1);
+    rec.spans.forEach(sp => {
+      const idx = +String(sp.idx);
+      if (idx < lo || idx > hi) return;
+      const total = textLenOf(sp.el);
+      let ls = String(sp.idx) === String(an.startIdx) ? (an.startOff || 0) : 0;
+      let le = String(sp.idx) === String(an.endIdx) ? (an.endOff != null ? an.endOff : total) : total;
+      if (String(sp.idx) !== String(an.startIdx)) ls = 0;
+      if (String(sp.idx) !== String(an.endIdx)) le = total;
+      ls = Math.max(0, Math.min(ls, total));
+      le = Math.max(0, Math.min(le, total));
+      if (le <= ls) return;
+
+      const segs = [];
+      let cursor = 0;
+      const w = document.createTreeWalker(sp.el, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = w.nextNode())) {
+        const len = (n.nodeValue || '').length;
+        const a0 = Math.max(ls, cursor);
+        const a1 = Math.min(le, cursor + len);
+        if (a1 > a0) segs.push({ node: n, from: a0 - cursor, to: a1 - cursor });
+        cursor += len;
+      }
+      segs.forEach(seg => {
+        const m = document.createElement('mark');
+        m.className = 'ann t-' + (a.type || 'important') + (a.id === activeId ? ' active' : '');
+        m.dataset.aid = a.id;
+        m.title = a.text || a.quote || '';
+        m.onclick = ev => { ev.stopPropagation(); focusAnn(a.id); };
+        try {
+          const r = document.createRange();
+          r.setStart(seg.node, seg.from);
+          r.setEnd(seg.node, seg.to);
+          r.surroundContents(m);
+        } catch (err) {
+          // 极端情况（节点已被别的批注拆开）退化成整段包裹
+          const parent = seg.node.parentNode;
+          if (!parent) return;
+          parent.insertBefore(m, seg.node);
+          m.appendChild(seg.node);
+        }
+      });
+    });
   }
 
   // ---------- 批注列表 ----------

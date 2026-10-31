@@ -330,9 +330,12 @@
         try { meta = (await doc.getMetadata()).info || {}; } catch (e) { }
         const r = window.PaperParser.parse(
           { title: meta.Title, author: meta.Author, size: f.size }, txt, doc.numPages, f.name);
-        // 标题+作者重复（多见于备份导入后 fileSize 缺失的情况）也算重复
+        // 标题+作者重复（多见于备份导入后 fileSize 缺失的情况）也算重复。
+        // 但「未识别题目」或没有作者的记录不能参与这种判重，
+        // 否则两篇都没识别出标题的 PDF 会被误判成同一篇而悄悄跳过。
         const k2 = ((r.title || '') + '|' + (r.authors || '')).trim();
-        if (k2 !== '|' && fp2.has(k2)) { skip++; continue; }
+        const metaOk = !!r.title && r.title !== '未识别题目' && !!(r.authors || '').trim();
+        if (metaOk && fp2.has(k2)) { skip++; continue; }
         r.id = uid();
         r.fileSize = f.size;
         fileCache.set(r.id, keep);
@@ -341,7 +344,7 @@
         r.tags = '';
         papers.unshift(r);
         fp.add(f.name + '|' + f.size);
-        fp2.add(((r.title || '') + '|' + (r.authors || '')).trim());
+        if (metaOk) fp2.add(k2);
         ok++;
       } catch (e) {
         console.warn('解析失败', f.name, e);
@@ -357,7 +360,7 @@
     if (ok) { localStorage.setItem(VER_KEY, RULES_VER); $('verbar').style.display = 'none'; }
     const msg = [];
     if (ok) msg.push(`成功导入 ${ok} 篇`);
-    if (skip) msg.push(`${skip} 篇已在库中（同名同大小，已自动跳过）`);
+    if (skip) msg.push(`${skip} 篇已在库中（重复文件已自动跳过）`);
     if (fail) msg.push(`${fail} 篇无法解析`);
     let text = msg.join('，') || '没有新增文献';
     if (skip && !ok) text += '。如需重新导入这些文件，请先在列表中删除旧记录';
@@ -431,12 +434,16 @@
       c.appendChild(el('b', null, f.label + '：' + shown));
       const b = el('button', null, '×');
       b.title = '移除该筛选';
-      b.onclick = () => {
+      const remove = () => {
         const map = { q: 'q', author: 'fAuthor', source: 'fSource', major: 'fMajor', sup: 'fSup', tag: 'fTag', rel: 'fRel', ymin: 'fYearMin', ymax: 'fYearMax', pmin: 'fPagesMin', pmax: 'fPagesMax' };
         if (f.k === 'cat') cat = '';
         else { const e = $(map[f.k]); if (e) e.value = ''; }
         render();
       };
+      // 筛选输入框还有焦点时，按下鼠标会让它先失焦并触发一次 render，
+      // 原来的按钮被替换掉，click 就丢了。放到 mousedown 阶段执行才稳。
+      b.onmousedown = ev => { ev.preventDefault(); ev.stopPropagation(); remove(); };
+      b.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); if (!ev.detail) remove(); };
       c.appendChild(b); box.appendChild(c);
     });
   }
@@ -508,7 +515,12 @@
     $('cShow').textContent = arr.length;
     $('cSel').textContent = sel.size;
     $('btnCompare').textContent = '对比 (' + sel.size + ')';
-    $('empty').style.display = papers.length ? 'none' : 'block';
+    // 库里有文献但筛完为空时，也给一句话，别只剩一个空表头
+    const noMatch = papers.length > 0 && arr.length === 0;
+    $('empty').innerHTML = noMatch
+      ? '<b>没有符合条件的文献</b>试试移除上面的筛选条件'
+      : '<b>还没有文献</b>左侧上传 PDF 开始，或点「导入备份」恢复已有数据';
+    $('empty').style.display = papers.length && !noMatch ? 'none' : 'block';
     $('tbl').style.display = papers.length ? 'table' : 'none';
 
     arr.forEach(p => {
@@ -584,6 +596,7 @@
         if (!confirm('删除《' + (p.title || '无题') + '》？此操作不可撤销。')) return;
         papers = papers.filter(x => x.id !== p.id);
         delete annotations[p.id];
+        fileCache.delete(p.id);
         sel.delete(p.id); save(); render();
       };
       tdA.append(br, be, bd); tr.appendChild(tdA);
@@ -885,7 +898,10 @@
     $('btnClear').onclick = () => {
       if (!papers.length) return;
       if (!confirm('确定清空全部 ' + papers.length + ' 篇文献？建议先「导出备份」。')) return;
-      papers = []; sel.clear(); cat = ''; save(); render(); toast('已清空');
+      papers = []; sel.clear(); cat = '';
+      // 批注和 PDF 内存缓存也要一起清，否则会留下孤儿数据、备份文件越滚越大
+      annotations = {}; fileCache.clear();
+      save(); render(); toast('已清空');
     };
     $('btnExport').onclick = exportXlsx;
     $('btnReparse').onclick = reparseAll;
