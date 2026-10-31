@@ -77,6 +77,7 @@
       fs.appendChild(o);
     });
     $('popFill').onclick = fillField;
+    $('popClaim').onclick = saveAsClaim;
     $('rdShot').onclick = startShot;
     // 选区变化时弹出气泡
     document.addEventListener('selectionchange', onSelChange);
@@ -89,7 +90,7 @@
   }
 
   // ---------- 打开 / 关闭 ----------
-  async function open(pid) {
+  async function open(pid, opts) {
     const p = api.getPaper(pid);
     if (!p) return;
     cur = p; curPage = 1; pending = null; editingId = null; filterT = '';
@@ -113,6 +114,7 @@
       paint();          // 重新打开时恢复已有批注的高亮与序号徽标
       renderList();
       $('rdLoading').classList.add('hide');
+      if (opts && opts.focus) setTimeout(() => focusEvidence(opts.focus, opts.quote), 120);
     } catch (e) {
       // 出错时保留提示。此前无论成功失败都会 hide，用户只能看到空白页
       $('rdLoading').textContent = '无法打开该 PDF：' + (e && e.message ? e.message : e) +
@@ -634,6 +636,49 @@
     closePop();
     window.getSelection().removeAllRanges();
     api.toast('已追加到「' + label + '」');
+  }
+
+  // ---------- 选中原文存为观点 ----------
+  function saveAsClaim() {
+    if (!pending || !pending.text) { api.toast('请先在正文里选中一段文字'); return; }
+    if (!api.addClaimFromSelection) { api.toast('当前版本未启用观点功能'); return; }
+    const note = $('popText').value.trim();
+    const p = pending;
+    closePop();
+    window.getSelection().removeAllRanges();
+    api.addClaimFromSelection(cur.id, p, note);
+  }
+
+  // ---------- 证据回跳：精确定位或退化为跳页 ----------
+  function clearEvidenceMarks() {
+    document.querySelectorAll('mark.ann.t-evidence').forEach(m => {
+      const host = m.parentNode;
+      if (!host) return;
+      while (m.firstChild) host.insertBefore(m.firstChild, m);
+      m.remove();
+    });
+  }
+  function focusEvidence(anchor, quote) {
+    if (!anchor) return;
+    const pageNo = Math.max(1, +(anchor.page || 1));
+    const rec = pages[pageNo - 1];
+    if (!rec) { api.toast('原文页码超出范围'); return; }
+    rec.wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    curPage = pageNo; updatePageLabel();
+    clearEvidenceMarks();
+    setTimeout(() => {
+      const range = anchorToRange(anchor, rec);
+      if (!range) {
+        api.toast('该证据无法精确锚定，已跳到第 ' + pageNo + ' 页，请按摘录核对原文');
+        return;
+      }
+      try {
+        paintAnn(rec, { id: '__evidence__', type: 'evidence', anchor, quote: quote || '' }, null);
+        api.toast('已定位到第 ' + pageNo + ' 页的证据');
+      } catch (e) {
+        api.toast('已跳到第 ' + pageNo + ' 页，但高亮失败，请按摘录核对');
+      }
+    }, 320);
   }
 
   // ---------- 框选截图收藏 ----------

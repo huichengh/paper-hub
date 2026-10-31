@@ -25,7 +25,16 @@
   let editId = null;
   // 批注：{ [paperId]: [ {id,pid,type,text,quote,anchor,page,at} ] }
   let annotations = {};
-  // PDF 原文件缓存（仅内存）：导入时保存，刷新后失效；检阅模式需要它
+  // P1：观点与研究机会
+  let claims = [];
+  let opportunities = [];
+  let settings = { researchQuestion: '', conditions: {}, view: 'library' };
+  let currentView = 'library';
+  // 存储状态
+  let dbReady = false;
+  let useLegacy = false;
+  let saveTimer = null;
+  // PDF 原文件缓存（仅内存）：优先从 IndexedDB 读取，刷新后仍可恢复
   const fileCache = new Map();
   const openReader = id => window.ReaderMode && window.ReaderMode.open(id);
 
@@ -43,45 +52,117 @@
     const s = $('status'); s.textContent = msg || ''; s.className = 'status' + (cls ? ' ' + cls : '');
     if (!msg) setTimeout(() => { if (s.textContent === msg) { s.textContent = ''; s.className = 'status'; } }, 100);
   }
-  const uid = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const uid = (prefix) => (prefix || 'p') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const sizeText = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB';
 
   // ---------- 存储 ----------
-  function save() {
+  function normalizePaper(p) {
+    if (!p || typeof p !== 'object') return;
+    if (typeof p.fileSize !== 'number') p.fileSize = 0;
+    if (typeof p.pages !== 'number') p.pages = 0;
+    if (typeof p.relevance !== 'string') p.relevance = '';
+    if (typeof p.tags !== 'string') p.tags = '';
+    if (typeof p.note !== 'string') p.note = '';
+    if (typeof p.keywords !== 'string') p.keywords = '';
+    if (typeof p.abstract !== 'string') p.abstract = '';
+    ['background', 'purpose', 'method', 'framework', 'innovation',
+     'conclusion', 'dimensions', 'criteria', 'topics'].forEach(k => {
+      if (typeof p[k] !== 'string') p[k] = '';
+    });
+    if (!Array.isArray(p.figures)) p.figures = [];
+    if (!Array.isArray(p.needCheck)) p.needCheck = [];
+    if (!p.fulltext || typeof p.fulltext !== 'object') p.fulltext = { status: 'none' };
+  }
+
+  function snapshot() {
+    return {
+      papers, annotations, claims, opportunities, sel: [...sel],
+      researchQuestion: settings.researchQuestion || '',
+      conditions: settings.conditions || {},
+      view: currentView
+    };
+  }
+
+  // localStorage 仅作为迁移来源与 IndexedDB 不可用时的兜底
+  function saveLegacy() {
     try {
-      localStorage.setItem(KEY, JSON.stringify({ papers, sel: [...sel], annotations }));
+      localStorage.setItem(KEY, JSON.stringify({
+        papers, sel: [...sel], annotations, claims, opportunities,
+        research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} }
+      }));
     } catch (e) {
-      // 摘要是长文本，撑爆配额时先丢摘要再试
       try {
         const lite = papers.map(p => Object.assign({}, p, { abstract: (p.abstract || '').slice(0, 200) }));
-        localStorage.setItem(KEY, JSON.stringify({ papers: lite, sel: [...sel], annotations }));
+        localStorage.setItem(KEY, JSON.stringify({
+          papers: lite, sel: [...sel], annotations, claims, opportunities,
+          research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} }
+        }));
         toast('存储空间不足，已精简摘要后保存');
       } catch (e2) { toast('保存失败：浏览器存储空间不足'); }
     }
   }
-  function load() {
+
+  function save() {
+    if (dbReady && !useLegacy && window.PaperDB) {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        window.PaperDB.saveSnapshot(snapshot()).catch(e => {
+          console.warn('IndexedDB 保存失败', e);
+          toast('保存到本地数据库失败：' + (e.message || e));
+        });
+      }, 140);
+      return;
+    }
+    saveLegacy();
+  }
+
+  async function saveNow() {
+    clearTimeout(saveTimer);
+    if (dbReady && !useLegacy && window.PaperDB) {
+      await window.PaperDB.saveSnapshot(snapshot());
+    } else saveLegacy();
+  }
+
+  function readLegacy() {
     try {
       const d = JSON.parse(localStorage.getItem(KEY) || '{}');
-      papers = Array.isArray(d.papers) ? d.papers : [];
-      sel = new Set(d.sel || []);
-      annotations = (d.annotations && typeof d.annotations === 'object') ? d.annotations : {};
-      // 兼容早期版本：补齐缺失字段，避免后续判重/导出异常
-      papers.forEach(p => {
-        if (typeof p.fileSize !== 'number') p.fileSize = 0;
-        if (typeof p.pages !== 'number') p.pages = 0;
-        if (typeof p.relevance !== 'string') p.relevance = '';
-        if (typeof p.tags !== 'string') p.tags = '';
-        if (typeof p.note !== 'string') p.note = '';
-        if (typeof p.keywords !== 'string') p.keywords = '';
-        if (typeof p.abstract !== 'string') p.abstract = '';
-        // 新增的深度字段与图示字段，旧数据可能缺失
-        ['background', 'purpose', 'method', 'framework', 'innovation',
-         'conclusion', 'dimensions', 'criteria', 'topics'].forEach(k => {
-          if (typeof p[k] !== 'string') p[k] = '';
-        });
-        if (!Array.isArray(p.figures)) p.figures = [];
-      });
-    } catch (e) { papers = []; sel = new Set(); annotations = {}; }
+      return {
+        papers: Array.isArray(d.papers) ? d.papers : [],
+        sel: Array.isArray(d.sel) ? d.sel : [],
+        annotations: (d.annotations && typeof d.annotations === 'object') ? d.annotations : {},
+        claims: Array.isArray(d.claims) ? d.claims : [],
+        opportunities: Array.isArray(d.opportunities) ? d.opportunities : [],
+        research: d.research || {}
+      };
+    } catch (e) { return { papers: [], sel: [], annotations: {}, claims: [], opportunities: [], research: {} }; }
+  }
+
+  function loadLegacy() {
+    const d = readLegacy();
+    papers = d.papers; sel = new Set(d.sel); annotations = d.annotations;
+    claims = d.claims || []; opportunities = d.opportunities || [];
+    settings = {
+      researchQuestion: (d.research && d.research.question) || '',
+      conditions: (d.research && d.research.conditions) || {},
+      view: 'library'
+    };
+    papers.forEach(normalizePaper);
+  }
+
+  async function loadFromDB() {
+    const snap = await window.PaperDB.loadSnapshot();
+    papers = snap.papers || [];
+    papers.forEach(normalizePaper);
+    annotations = snap.annotations || {};
+    claims = snap.claims || [];
+    opportunities = snap.opportunities || [];
+    const ui = snap.ui || {};
+    sel = new Set(Array.isArray(ui.sel) ? ui.sel : []);
+    settings = {
+      researchQuestion: ui.researchQuestion || '',
+      conditions: ui.conditions || {},
+      view: ui.view || 'library'
+    };
   }
 
   // ---------- PDF 解析 ----------
@@ -105,6 +186,37 @@
     return pdfjsP;
   }
 
+  // 统一获取 PDF 二进制：内存缓存 → IndexedDB → 用户重新指认
+  async function getBuffer(p, allowPrompt) {
+    if (!p) return null;
+    if (fileCache.has(p.id)) return fileCache.get(p.id).slice(0);
+    if (dbReady && window.PaperDB) {
+      try {
+        const buf = await window.PaperDB.getPdf(p.id);
+        if (buf) { fileCache.set(p.id, buf); return buf.slice(0); }
+      } catch (e) { console.warn('读取本地 PDF 失败', e); }
+    }
+    if (allowPrompt === false) return null;
+    toast('请重新选择《' + (p.title || p.fileName || '这篇 PDF') + '》的原文件');
+    return new Promise((resolve, reject) => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'application/pdf,.pdf';
+      inp.onchange = async () => {
+        const f = inp.files && inp.files[0];
+        if (!f) return reject(new Error('未选择文件'));
+        const buf = await f.arrayBuffer();
+        const keep = buf.slice(0);
+        fileCache.set(p.id, keep);
+        if (dbReady && window.PaperDB) {
+          window.PaperDB.putPdf(p.id, keep, { name: f.name, size: f.size }).catch(() => { });
+        }
+        resolve(keep.slice(0));
+      };
+      inp.addEventListener('cancel', () => reject(new Error('已取消选择文件')));
+      inp.click();
+    });
+  }
+
   /**
    * 重新解析：对库中文献用「当前版本的解析规则」重跑一遍。
    * 解决一个真实使用痛点——解析规则更新后，存进 localStorage 的旧记录不会自动刷新，
@@ -120,21 +232,32 @@
     const AUTO = ['title', 'authors', 'year', 'type', 'category', 'source', 'school',
       'major', 'supervisor', 'coSupervisor', 'keywords', 'abstract', 'pages'];
 
-    // 缺原文件的篇目
-    const missing = papers.filter(p => !fileCache.has(p.id));
+    // 缺原文件的篇目：先看内存缓存，再看 IndexedDB
+    const missing = [];
+    for (const p of papers) {
+      if (fileCache.has(p.id)) continue;
+      let has = false;
+      if (dbReady && window.PaperDB) {
+        try { has = await window.PaperDB.hasPdf(p.id); } catch (e) { has = false; }
+      }
+      if (!has) missing.push(p);
+    }
     if (missing.length) {
       const picked = await askForFolder(
-        `库中有 ${missing.length} 篇缺 PDF 原文件（刷新页面后缓存会清空）。\n` +
+        `库中有 ${missing.length} 篇缺 PDF 原文件。\n` +
         '请选择存放这些 PDF 的文件夹，平台会自动按文件名配对并重新解析。');
       if (!picked) { toast('已取消'); return; }
-      // 把选中的文件按「文件名」建立索引，回填缓存
       const byName = new Map();
       for (const f of picked) byName.set(f.name, f);
       for (const p of missing) {
         const f = byName.get(p.fileName);
         if (f) {
           const buf = await f.arrayBuffer();
-          fileCache.set(p.id, buf.slice(0));
+          const keep = buf.slice(0);
+          fileCache.set(p.id, keep);
+          if (dbReady && window.PaperDB) {
+            try { await window.PaperDB.putPdf(p.id, keep, { name: f.name, size: f.size }); } catch (e) { }
+          }
         }
       }
     }
@@ -142,7 +265,7 @@
     let ok = 0, need = 0, fail = 0;
     setStatus('重新解析中…', 'busy');
     for (const p of papers) {
-      const buf = fileCache.get(p.id);
+      const buf = await getBuffer(p, false);
       if (!buf) { need++; continue; }
       try {
         const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
@@ -163,7 +286,8 @@
       } catch (e) { fail++; }
     }
     setStatus('');
-    save(); render();
+    await saveNow();
+    render();
     if (ok) { localStorage.setItem(VER_KEY, RULES_VER); $('verbar').style.display = 'none'; }
     const msg = [`已重新解析 ${ok} 篇`];
     if (need) msg.push(`${need} 篇未找到对应 PDF（文件名需与库中一致）`);
@@ -233,7 +357,7 @@
 
   // 取一篇论文的正文文本（用于 AI 抽取）
   async function paperText(p, lib) {
-    const buf = fileCache.get(p.id);
+    const buf = await getBuffer(p, false);
     if (!buf) return null;
     const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
     let txt = '';
@@ -255,8 +379,19 @@
       openAiCfg();
       return;
     }
-    if (!confirm('将把所选论文的内容发送到你配置的 AI 服务进行抽取，是否继续？')) return;
+    const cfg = window.PaperAI.getCfg();
     const lib = await pdfjs();
+    // 发送前让用户看到服务商和一段真实待发送文本，而不是只给一句抽象提示
+    const sample = await paperText(list[0], lib).catch(() => null);
+    if (!sample) { toast('第一篇论文缺少 PDF 原文件，无法预览发送内容'); return; }
+    const preview = sample.replace(/\s+/g, ' ').slice(0, 360);
+    const okSend = confirm(
+      `即将把 ${list.length} 篇论文的摘要与正文片段发送到：\n` +
+      `${cfg.base || 'OpenAI 兼容接口'} / ${cfg.model || '未填写模型'}\n\n` +
+      `示例片段（《${list[0].title || '未命名'}》）：\n${preview}…\n\n` +
+      '内容会离开本机，是否继续？'
+    );
+    if (!okSend) return;
     let ok = 0, skip = 0, fail = 0;
     const errs = [];
     for (let i = 0; i < list.length; i++) {
@@ -339,9 +474,14 @@
         r.id = uid();
         r.fileSize = f.size;
         fileCache.set(r.id, keep);
+        r.fulltext = { status: 'none' };
         r.addedAt = new Date().toISOString();
         r.relevance = '';
         r.tags = '';
+        if (dbReady && window.PaperDB) {
+          try { await window.PaperDB.putPdf(r.id, keep, { name: f.name, size: f.size }); }
+          catch (e) { console.warn('PDF 写入 IndexedDB 失败', e); toast('PDF 原文未能写入本地数据库，刷新后需重新选择'); }
+        }
         papers.unshift(r);
         fp.add(f.name + '|' + f.size);
         if (metaOk) fp2.add(k2);
@@ -355,7 +495,9 @@
     bar.style.width = '100%';
     setTimeout(() => { prog.style.display = 'none'; bar.style.width = '0'; }, 400);
     setStatus('');
-    save(); render();
+    // 导入是重操作，立即落库，避免用户马上刷新导致丢最后几篇
+    await saveNow();
+    render();
     // 新导入的内容已经是当前规则解析的，不必再提示重解析
     if (ok) { localStorage.setItem(VER_KEY, RULES_VER); $('verbar').style.display = 'none'; }
     const msg = [];
@@ -366,6 +508,111 @@
     if (skip && !ok) text += '。如需重新导入这些文件，请先在列表中删除旧记录';
     if (failNames.length) text += '：' + failNames.slice(0, 2).join('、') + (failNames.length > 2 ? ' 等' : '');
     toast(text);
+  }
+
+  // ---------- 全文抽取（按页写入 IndexedDB） ----------
+  let ftRunning = false, ftCancel = false;
+  function ftShow(text, pct) {
+    $('ftbar').style.display = 'flex';
+    if (text != null) $('ftLabel').textContent = text;
+    if (pct != null) {
+      const v = Math.max(0, Math.min(100, Math.round(pct)));
+      $('ftFill').style.width = v + '%';
+      $('ftPct').textContent = v + '%';
+    }
+  }
+  function ftHide() { $('ftbar').style.display = 'none'; $('ftFill').style.width = '0'; }
+  function ftChip(p) {
+    const f = (p && p.fulltext) || {};
+    if (!f.status || f.status === 'none') return null;
+    const s = el('span', 'ft-chip' + (f.status === 'done' ? '' : (f.status === 'error' ? ' err' : ' part')));
+    if (f.status === 'done') s.textContent = '全文 ' + (f.extractedPages || f.pages || 0) + ' 页';
+    else if (f.status === 'partial' || f.status === 'cancelled') s.textContent = '全文 ' + (f.extractedPages || 0) + '/' + (f.pages || 0) + ' 页 · 未完成';
+    else if (f.status === 'running') s.textContent = '全文抽取中…';
+    else s.textContent = '全文抽取失败';
+    s.title = f.error || ('状态：' + f.status);
+    return s;
+  }
+
+  async function extractFulltext(list) {
+    if (ftRunning) { toast('已有全文抽取任务在运行'); return; }
+    if (!dbReady || !window.PaperDB) { toast('当前浏览器不支持 IndexedDB，无法持久化全文'); return; }
+    if (!list.length) return;
+    ftRunning = true; ftCancel = false;
+    const lib = await pdfjs();
+    let totalPages = 0, donePages = 0, okPapers = 0, failPapers = 0;
+    const counts = list.map(p => Math.max(1, +p.pages || 1));
+    const grand = counts.reduce((a, b) => a + b, 0);
+    ftShow('准备抽取全文…', 0);
+    try {
+      for (let i = 0; i < list.length; i++) {
+        if (ftCancel) break;
+        const p = list[i];
+        let doc = null;
+        try {
+          const buf = await getBuffer(p, false);
+          if (!buf) throw new Error('缺少 PDF 原文件');
+          doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
+          const total = doc.numPages;
+          totalPages += total;
+          let chars = 0, failed = [], doneForPaper = 0;
+          for (let n = 1; n <= total; n++) {
+            if (ftCancel) break;
+            ftShow(`正在抽取 ${i + 1}/${list.length} · ${(p.title || p.fileName || '').slice(0, 22)} · 第 ${n}/${total} 页`,
+              (donePages + (n - 1)) / Math.max(grand, 1) * 100);
+            try {
+              const pg = await doc.getPage(n);
+              const tc = await pg.getTextContent();
+              const text = tc.items.map(x => x.str).join(' ').replace(/\s+/g, ' ').trim();
+              await window.PaperDB.putPageText(p.id, n, text);
+              chars += text.length;
+              doneForPaper++;
+              donePages++;
+            } catch (err) {
+              failed.push(n);
+              donePages++;
+            }
+            // 不逐页 render，避免抽全文时卡住表格；保存交给 debounce
+            save();
+          }
+          p.fulltext = {
+            status: ftCancel ? 'cancelled' : (failed.length ? 'partial' : 'done'),
+            pages: total, extractedPages: doneForPaper, failedPages: failed,
+            chars, at: new Date().toISOString(),
+            error: failed.length ? ('部分页抽取失败：' + failed.slice(0, 8).join(',')) : ''
+          };
+          if (p.fulltext.status === 'error') failPapers++; else okPapers++;
+          if (ftCancel) {
+            for (let j = i + 1; j < list.length; j++) {
+              list[j].fulltext = Object.assign({}, list[j].fulltext || {}, { status: 'cancelled' });
+            }
+            break;
+          }
+        } catch (e) {
+          p.fulltext = { status: 'error', pages: +p.pages || 0, extractedPages: 0, error: e.message || String(e), at: new Date().toISOString() };
+          failPapers++;
+        }
+        save();
+      }
+      await saveNow();
+      render();
+      if (ftCancel) toast('已取消，已抽取的页面已保存');
+      else if (failPapers) toast(`全文抽取结束：${okPapers} 篇完成，${failPapers} 篇失败，可重新点「全文抽取」重试`);
+      else toast(`全文抽取完成 ${okPapers} 篇`);
+    } finally {
+      ftRunning = false;
+      setTimeout(ftHide, 700);
+    }
+  }
+
+  function runFulltext() {
+    if (!papers.length) { toast('文献库为空'); return; }
+    let list = papers.filter(p => sel.has(p.id));
+    if (!list.length) {
+      if (!confirm(`未勾选文献，是否对全部 ${papers.length} 篇抽取全文？`)) return;
+      list = papers.slice();
+    }
+    extractFulltext(list);
   }
 
   // ---------- 筛选 ----------
@@ -541,6 +788,8 @@
       w.appendChild(el('div', null, p.title || '（无题目）'));
       const sub = [p.authors, p.year].filter(Boolean).join(' · ');
       if (sub) w.appendChild(el('div', 't-sub', sub));
+      const chip = ftChip(p);
+      if (chip) w.appendChild(chip);
       tdT.appendChild(w); tr.appendChild(tdT);
 
       // 作者
@@ -592,12 +841,17 @@
       const be = el('button', 'rowbtn', '编辑');
       be.onclick = () => openEdit(p.id);
       const bd = el('button', 'rowbtn', '删除');
-      bd.onclick = () => {
+      bd.onclick = async () => {
         if (!confirm('删除《' + (p.title || '无题') + '》？此操作不可撤销。')) return;
+        if (dbReady && window.PaperDB) {
+          try { await window.PaperDB.deletePaperCascade(p.id); } catch (e) { console.warn('级联删除失败', e); }
+        }
         papers = papers.filter(x => x.id !== p.id);
         delete annotations[p.id];
         fileCache.delete(p.id);
-        sel.delete(p.id); save(); render();
+        sel.delete(p.id);
+        if (window.ResearchOS) window.ResearchOS.removePaper(p.id);
+        save(); render();
       };
       tdA.append(br, be, bd); tr.appendChild(tdA);
       tb.appendChild(tr);
@@ -804,7 +1058,14 @@
     toast('已导出 ' + papers.length + ' 篇');
   }
   function exportBackup() {
-    const data = JSON.stringify({ v: 2, papers, sel: [...sel], annotations, at: new Date().toISOString() }, null, 1);
+    const data = JSON.stringify({
+      v: 3,
+      app: 'PaperHub Research OS',
+      papers, sel: [...sel], annotations, claims, opportunities,
+      research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} },
+      note: '备份包含文献字段、批注、观点与研究机会；不包含 PDF 原文与逐页全文缓存。',
+      at: new Date().toISOString()
+    }, null, 1);
     dl(new Blob([data], { type: 'application/json' }), '论文库备份_' + new Date().toISOString().slice(0, 10) + '.json');
     toast('备份已导出');
   }
@@ -813,6 +1074,9 @@
     fr.onload = () => {
       try {
         const d = JSON.parse(fr.result);
+        if (d && d.v && +d.v > 3) {
+          toast('这份备份来自更高版本（v' + d.v + '），将尝试导入，未知字段会被忽略');
+        }
         const inc = Array.isArray(d.papers) ? d.papers : [];
         if (!inc.length) { toast('备份里没有文献'); return; }
         const incAnns = (d.annotations && typeof d.annotations === 'object') ? d.annotations : {};
@@ -838,6 +1102,8 @@
           p.addedAt = p.addedAt || new Date().toISOString();
           if (!Array.isArray(p.figures)) p.figures = [];
           if (!Array.isArray(p.needCheck)) p.needCheck = [];
+          // 备份不含 PDF 与逐页全文，恢复后标记为待重新抽取
+          p.fulltext = { status: 'none' };
           byKey.set(key, p);
           papers.push(p);
           n++;
@@ -859,17 +1125,87 @@
           });
           annotations[nid] = target;
         });
+        // P1：观点与研究机会随备份迁移；paperId / claimId 需要重新映射
+        const incClaims = Array.isArray(d.claims) ? d.claims : ((d.research && Array.isArray(d.research.claims)) ? d.research.claims : []);
+        const incOpps = Array.isArray(d.opportunities) ? d.opportunities : ((d.research && Array.isArray(d.research.opportunities)) ? d.research.opportunities : []);
+        const claimMap = {};
+        let claimN = 0, oppN = 0;
+        incClaims.forEach(c => {
+          if (!c || typeof c !== 'object') return;
+          const npid = c.paperId ? idMap[c.paperId] : '';
+          if (c.paperId && !npid) return;   // 原论文已不在库中，观点没有可追溯证据，跳过
+          const exist = claims.some(x => x.text === c.text && x.paperId === npid && String(x.page) === String(c.page));
+          if (exist) return;
+          const copy = Object.assign({}, c);
+          copy.id = uid('c'); copy.paperId = npid || '';
+          copy.question = copy.question || (d.research && d.research.question) || '';
+          copy.createdAt = copy.createdAt || new Date().toISOString();
+          copy.updatedAt = new Date().toISOString();
+          claims.push(copy);
+          if (c.id) claimMap[c.id] = copy.id;
+          claimN++;
+        });
+        incOpps.forEach(o => {
+          if (!o || typeof o !== 'object') return;
+          const copy = Object.assign({}, o);
+          copy.id = uid('o');
+          copy.claimIds = (o.claimIds || []).map(id => claimMap[id]).filter(Boolean);
+          copy.paperIds = [...new Set(copy.claimIds.map(id => (claims.find(c => c.id === id) || {}).paperId).filter(Boolean))];
+          copy.updatedAt = new Date().toISOString();
+          opportunities.push(copy); oppN++;
+        });
         // 原备份里勾选的论文，恢复后尽量保持勾选状态
         if (Array.isArray(d.sel)) d.sel.forEach(oldId => { if (idMap[oldId]) sel.add(idMap[oldId]); });
+        if (!settings.researchQuestion && d.research && d.research.question) settings.researchQuestion = d.research.question;
+        if (!Object.keys(settings.conditions || {}).length && d.research && d.research.conditions) settings.conditions = d.research.conditions;
         save(); render();
+        if (window.ResearchOS) window.ResearchOS.renderAll();
         const parts = [];
         if (n) parts.push(`已导入 ${n} 篇`);
         if (dup) parts.push(`跳过重复 ${dup} 篇`);
         if (annN) parts.push(`恢复批注 ${annN} 条`);
+        if (claimN) parts.push(`恢复观点 ${claimN} 条`);
+        if (oppN) parts.push(`恢复机会 ${oppN} 张`);
         toast(parts.join('，') || '没有可导入的内容');
       } catch (e) { toast('备份文件解析失败'); }
     };
     fr.readAsText(file);
+  }
+
+  // ---------- 视图切换 ----------
+  function switchView(view, silent) {
+    const v = ['library', 'claims', 'opportunities'].includes(view) ? view : 'library';
+    currentView = v;
+    document.querySelectorAll('#appnav button[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+    $('viewLibrary').classList.toggle('hide', v !== 'library');
+    $('viewClaims').classList.toggle('on', v === 'claims');
+    $('viewOpportunities').classList.toggle('on', v === 'opportunities');
+    if ((v === 'claims' || v === 'opportunities') && window.ResearchOS) window.ResearchOS.renderAll();
+    if (!silent) {
+      save();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+  // ---------- 旧数据迁移 ----------
+  async function doMigrate() {
+    if (!dbReady || !window.PaperDB) { toast('当前浏览器不支持 IndexedDB，继续使用旧存储'); return; }
+    try {
+      await window.PaperDB.migrateLegacy({
+        papers, annotations, claims, opportunities, sel: [...sel],
+        research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} }
+      });
+      useLegacy = false;
+      await loadFromDB();
+      $('migrateModal').classList.remove('on');
+      if (window.ResearchOS) window.ResearchOS.renderAll();
+      switchView(settings.view || 'library', true);
+      render();
+      toast('数据已迁移到 IndexedDB，旧数据仍保留在 localStorage 作为回退');
+    } catch (e) {
+      useLegacy = true;
+      toast('迁移失败，继续使用旧存储：' + (e.message || e));
+    }
   }
 
   // ---------- 事件 ----------
@@ -895,12 +1231,16 @@
       if (ev === 'drop' && e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
     }));
 
-    $('btnClear').onclick = () => {
+    $('btnClear').onclick = async () => {
       if (!papers.length) return;
       if (!confirm('确定清空全部 ' + papers.length + ' 篇文献？建议先「导出备份」。')) return;
       papers = []; sel.clear(); cat = '';
-      // 批注和 PDF 内存缓存也要一起清，否则会留下孤儿数据、备份文件越滚越大
-      annotations = {}; fileCache.clear();
+      // 批注、观点、PDF 内存缓存都一起清，避免留下孤儿数据
+      annotations = {}; claims = []; opportunities = []; fileCache.clear();
+      if (dbReady && window.PaperDB) {
+        try { await window.PaperDB.clearLibrary(); } catch (e) { console.warn('清空本地库失败', e); }
+      }
+      if (window.ResearchOS) window.ResearchOS.renderAll();
       save(); render(); toast('已清空');
     };
     $('btnExport').onclick = exportXlsx;
@@ -914,6 +1254,19 @@
     $('aiSave').onclick = saveAiCfg;
     $('aiTest').onclick = testAi;
     $('btnAiExtract').onclick = aiExtractSelected;
+    $('btnFulltext').onclick = runFulltext;
+    $('ftCancel').onclick = () => {
+      ftCancel = true;
+      $('ftLabel').textContent = '正在取消，已完成页面会保留…';
+    };
+    document.querySelectorAll('#appnav button[data-view]').forEach(b => {
+      b.onclick = () => switchView(b.dataset.view);
+    });
+    $('migrateNow').onclick = doMigrate;
+    $('migrateBackup').onclick = () => {
+      exportBackup();
+      setTimeout(doMigrate, 400);
+    };
 
     $('btnCompare').onclick = openCompare;
     $('btnCloseDrawer').onclick = closeCompare;
@@ -950,30 +1303,97 @@
   }
 
   // ---------- 检阅模式依赖注入 ----------
-  window.ReaderMode.init({
-    getPaper: id => papers.find(x => x.id === id),
-    getAnnotations: id => (annotations[id] || []).slice(),
-    setAnnotations: (id, list) => { annotations[id] = list; save(); },
-    save,
-    toast,
-    getLib: pdfjs,
-    getFileBuffer: async p => {
-      if (fileCache.has(p.id)) return fileCache.get(p.id);
-      // 页面刷新后内存缓存会清空，需要用户重新指认原文件
-      toast('请重新选择这篇 PDF 的原文件（刷新页面后需重新指认）');
-      return new Promise((resolve, reject) => {
-        const inp = document.createElement('input');
-        inp.type = 'file'; inp.accept = 'application/pdf,.pdf';
-        inp.onchange = () => {
-          const f = inp.files[0];
-          if (!f) return reject(new Error('未选择文件'));
-          f.arrayBuffer().then(buf => resolve(buf.slice(0)));   // 复制后再交出去，避免被 pdf.js detach
-        };
-        inp.click();
-      });
-    }
-  });
+  function initReader() {
+    window.ReaderMode.init({
+      getPaper: id => papers.find(x => x.id === id),
+      getAnnotations: id => (annotations[id] || []).slice(),
+      setAnnotations: (id, list) => { annotations[id] = list; save(); },
+      save,
+      toast,
+      getLib: pdfjs,
+      getFileBuffer: async p => {
+        const buf = await getBuffer(p, true);
+        if (!buf) throw new Error('未取得 PDF 文件');
+        return buf;
+      },
+      addClaimFromSelection: (pid, pending, note) => {
+        window.ReaderMode.close();
+        switchView('claims');
+        window.ResearchOS.addClaimFromSelection(pid, pending, note);
+      }
+    });
+  }
 
-  load(); bind(); initImportFlow(); render();
+  // ---------- 启动 ----------
+  async function boot() {
+    let info = { ok: false };
+    try {
+      if (window.PaperDB) info = await window.PaperDB.init();
+    } catch (e) { info = { ok: false, error: e.message || String(e) }; }
+    dbReady = !!info.ok;
+    if (!dbReady) {
+      useLegacy = true;
+      loadLegacy();
+      bind(); initImportFlow(); initReader();
+      window.ResearchOS.init(researchHooks());
+      switchView('library', true);
+      render();
+      toast('IndexedDB 不可用，已退回旧存储；全文与证据持久化将不可用');
+      return;
+    }
+
+    let migrated = null;
+    try { migrated = await window.PaperDB.getMeta('migration', null); } catch (e) { migrated = null; }
+    const legacy = readLegacy();
+    if (!migrated && legacy.papers.length) {
+      // 先按旧数据渲染，等用户在弹窗里选择备份/迁移
+      loadLegacy();
+      useLegacy = true;
+      bind(); initImportFlow(); initReader();
+      window.ResearchOS.init(researchHooks());
+      switchView('library', true);
+      render();
+      $('migrateModal').classList.add('on');
+      return;
+    }
+
+    try {
+      await loadFromDB();
+      useLegacy = false;
+    } catch (e) {
+      console.warn('读取 IndexedDB 失败', e);
+      useLegacy = true;
+      loadLegacy();
+      toast('本地数据库读取失败，已回退到旧存储');
+    }
+    bind(); initImportFlow(); initReader();
+    window.ResearchOS.init(researchHooks());
+    switchView(settings.view || 'library', true);
+    render();
+  }
+
+  function researchHooks() {
+    return {
+      getPapers: () => papers,
+      getClaims: () => claims,
+      getOpps: () => opportunities,
+      getSettings: () => settings,
+      updateSettings: patch => { Object.assign(settings, patch || {}); },
+      getSelected: () => [...sel],
+      clearSelection: () => { sel.clear(); save(); },
+      save,
+      toast,
+      setView: v => switchView(v),
+      openReader: id => window.ReaderMode.open(id),
+      openEvidence: (id, anchor, quote) => window.ReaderMode.open(id, { focus: anchor, quote }),
+      exportBackup
+    };
+  }
+
   window.__papers = () => papers;
+  window.__state = () => ({
+    papers, annotations, claims, opportunities, settings,
+    dbReady, useLegacy, currentView, selected: [...sel]
+  });
+  boot();
 })();

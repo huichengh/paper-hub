@@ -4,12 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-size='19' text-anchor='middle' fill='white' font-family='sans-serif'%3E论%3C/text%3E%3C/svg%3E">
-<title>论文汇总与对比平台</title>
+<title>研知引擎 PaperHub Research OS</title>
 <style>
   :root{
     --bg:#f6f7f9; --panel:#ffffff; --line:#e3e6ea; --line2:#eef0f3;
     --txt:#1b1f24; --txt2:#5b6470; --txt3:#8b95a1;
     --acc:#2563eb; --acc-soft:#eaf1fe;
+    --teal:#0f766e; --teal-soft:#e7f5f2;
     --warn:#b45309; --warn-soft:#fef3e2;
     --ok:#15803d; --ok-soft:#e8f5ec;
     --danger:#b91c1c; --danger-soft:#fdecec;
@@ -342,17 +343,154 @@
   .shotmask{position:absolute; inset:0; z-index:30; cursor:crosshair; background:rgba(37,99,235,.06)}
   .shotrect{position:absolute; border:1.5px dashed var(--acc); background:rgba(37,99,235,.13); pointer-events:none}
   .rd-shooting .txt-layer{pointer-events:none}
+  mark.ann.t-evidence{background:#ffe58a; box-shadow:0 0 0 1.5px #d4a017 inset; border-radius:2px}
 
+  /* ---------- Research OS：顶部导航 ---------- */
+  .appnav{
+    display:flex; align-items:center; gap:2px; padding:0 18px;
+    background:var(--panel); border-bottom:1px solid var(--line); min-height:38px;
+  }
+  .appnav button{
+    padding:10px 14px 9px; color:var(--txt2); font-size:12.5px;
+    border-bottom:2px solid transparent;
+  }
+  .appnav button:hover{color:var(--acc)}
+  .appnav button.on{color:var(--acc); border-bottom-color:var(--acc); font-weight:700}
+  .navfuture{font-size:11.5px;color:var(--txt3);padding-right:2px}
+
+  /* ---------- 全文抽取进度 ---------- */
+  .ftbar{
+    display:flex; align-items:center; gap:10px; margin:0 0 10px;
+    background:#f4f9ff; border:1px solid #d6e6fb; border-radius:7px; padding:8px 12px;
+  }
+  .ftlabel{font-size:12.5px;color:#1d4ed8;white-space:nowrap;max-width:46%;overflow:hidden;text-overflow:ellipsis}
+  .ftprog{flex:1;height:6px;background:#dbe9fb;border-radius:99px;overflow:hidden;min-width:100px}
+  .ftprog i{display:block;height:100%;width:0;background:var(--acc);transition:width .2s}
+  .ftpct{font-size:11.5px;color:var(--txt2);font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+  .ft-chip{display:inline-block;margin-top:3px;font-size:10.5px;padding:0 6px;border-radius:9px;background:#eef4fb;color:#1f5fa8}
+  .ft-chip.part{background:var(--warn-soft);color:var(--warn)}
+  .ft-chip.err{background:var(--danger-soft);color:var(--danger)}
+
+  /* ---------- Research OS：通用 ---------- */
+  .research-view{display:none;padding:24px 22px 70px;max-width:1320px;margin:0 auto}
+  .research-view.on{display:block}
+  #viewLibrary.hide{display:none}
+  .rwrap{max-width:1280px;margin:0 auto}
+  .rhead{display:flex;align-items:flex-start;gap:18px;margin-bottom:16px}
+  .rhead h2{font-size:25px;line-height:1.35;margin:2px 0 5px;color:#102a43}
+  .rhead p{color:var(--txt2);font-size:12.8px;max-width:780px}
+  .rkicker{font-size:10.5px;font-weight:700;color:var(--teal);letter-spacing:.12em}
+  .ractions{display:flex;gap:7px;flex-wrap:wrap;margin-left:auto;align-items:center}
+  .rpanel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px 15px;margin-bottom:14px}
+  .rsetup{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  .roppbar{display:flex;gap:9px;flex-wrap:wrap;align-items:flex-end}
+  .roppbar .rf{flex:2;min-width:220px}
+  .roppbar select{max-width:180px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;font-size:12px}
+  .rf{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--txt3);min-width:130px;flex:1}
+  .rf span{font-size:11px;color:var(--txt3)}
+  .rf input,.rf select{
+    width:100%; border:1px solid var(--line); border-radius:6px; padding:6px 8px;
+    background:#fff; font-size:12.5px; color:var(--txt); outline:none;
+  }
+  .rf input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(37,99,235,.08)}
+  .rq-papers{font-size:11.5px;color:var(--txt2);white-space:nowrap;padding-bottom:7px}
+  .rstatrow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  .rstat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 13px}
+  .rstat b{display:block;font-size:21px;line-height:1.2;color:#102a43}
+  .rstat span{font-size:11.5px;color:var(--txt3)}
+  .rstat.support b{color:var(--teal)} .rstat.oppose b{color:var(--danger)}
+  .rstat.conditional b{color:var(--warn)} .rstat.unknown b{color:var(--txt2)}
+  .rcols{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:16px;align-items:start}
+  .rmain,.rside{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+  .rmain{min-width:0}
+  .rside{padding:14px}
+  .rside h3,.rbar h3{font-size:13.5px;color:#263442}
+  .rbar{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .rbar select{font-size:11.5px;padding:3px 6px;border:1px solid var(--line);border-radius:5px;background:#fff}
+  .rlist{padding:12px 13px;display:flex;flex-direction:column;gap:9px;min-height:120px}
+  .rmatrix{font-size:11.5px;overflow:auto}
+  .rmatrix table{width:100%;border-collapse:collapse}
+  .rmatrix th,.rmatrix td{border-bottom:1px solid var(--line2);padding:6px 3px;text-align:center;white-space:nowrap}
+  .rmatrix th:first-child,.rmatrix td:first-child{text-align:left;max-width:112px;overflow:hidden;text-overflow:ellipsis}
+  .rmatrix thead th{color:var(--txt3);font-size:10.5px;font-weight:600}
+  .rnote{font-size:11px;color:var(--txt3);border-top:1px dashed var(--line);margin-top:10px;padding-top:9px;line-height:1.65}
+  .empty-r{padding:28px 20px;text-align:center;color:var(--txt3);font-size:12.5px;line-height:1.8}
+  .empty-r b{display:block;color:var(--txt2);font-size:13.5px;margin-bottom:4px}
+  .mini{font-size:11.5px;color:var(--txt3);line-height:1.65}
+
+  /* ---------- 观点卡片 ---------- */
+  .claim-card{
+    border:1px solid var(--line); border-left:3px solid var(--txt3);
+    border-radius:7px; padding:10px 12px; background:#fff;
+  }
+  .claim-card.support{border-left-color:var(--teal)}
+  .claim-card.oppose{border-left-color:var(--danger)}
+  .claim-card.conditional{border-left-color:#d97706}
+  .claim-card.unknown{border-left-color:#94a3b8}
+  .cc-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:5px}
+  .cc-text{font-size:13.2px;line-height:1.65;color:#243447;font-weight:600}
+  .cc-meta{font-size:11px;color:var(--txt3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+  .cc-quote{
+    margin-top:7px;background:#fafbfd;border:1px dashed var(--line);border-radius:5px;
+    padding:7px 9px;font-size:11.5px;color:#4b5a6b;line-height:1.65;
+  }
+  .cc-quote b{color:var(--txt2);font-weight:600}
+  .cc-act{display:flex;gap:6px;margin-top:7px;flex-wrap:wrap}
+  .cc-act .btn{padding:2px 8px;font-size:11px}
+  .pill{display:inline-block;padding:0 7px;border-radius:10px;font-size:10.5px;line-height:1.7;white-space:nowrap}
+  .pill.support{background:var(--teal-soft);color:#0f6b62}
+  .pill.oppose{background:var(--danger-soft);color:var(--danger)}
+  .pill.conditional{background:var(--warn-soft);color:var(--warn)}
+  .pill.unknown{background:#eef1f5;color:#64748b}
+  .pill.confirmed{background:var(--ok-soft);color:var(--ok)}
+  .pill.unconfirmed{background:#fff7ed;color:#c2410c}
+  .pill.evidence{background:#eef4fb;color:#1f5fa8}
+
+  /* ---------- 机会卡片 ---------- */
+  .ropplist{display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:13px}
+  .opp-card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px 15px;display:flex;flex-direction:column;gap:7px}
+  .opp-card.saved{border-color:#b9d9d4;box-shadow:0 0 0 2px rgba(15,118,110,.05)}
+  .opp-top{display:flex;align-items:flex-start;gap:8px}
+  .opp-top h4{font-size:13.5px;line-height:1.55;color:#172b3d;flex:1}
+  .opp-rq{font-size:12.2px;color:#32485c;line-height:1.65;background:#f8fbfd;border-radius:5px;padding:7px 9px}
+  .opp-meta{display:flex;gap:6px;flex-wrap:wrap}
+  .opp-sec{font-size:11.5px;color:var(--txt2);line-height:1.65}
+  .opp-sec b{color:var(--txt);font-size:11.5px}
+  .opp-ev{display:flex;flex-wrap:wrap;gap:5px}
+  .ev-chip{
+    display:inline-flex;align-items:center;gap:4px;border:1px solid #d7e5f5;background:#f4f9ff;
+    color:#1f5fa8;border-radius:11px;padding:1px 8px;font-size:10.5px;cursor:pointer;max-width:100%;
+  }
+  .ev-chip:hover{background:#e8f2ff}
+  .opp-act{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;border-top:1px dashed var(--line);padding-top:8px}
+  .opp-act .btn{padding:2px 8px;font-size:11px}
+  .calloutline{border-left:3px solid #d9a441;background:var(--warn-soft);padding:8px 11px;border-radius:0 5px 5px 0;font-size:11.5px;color:#7a4c09;line-height:1.65;margin-top:9px}
+  .mini .ck{display:flex;align-items:flex-start;gap:6px;padding:3px 0;font-size:11.5px;color:var(--txt2)}
+  .mini .ck input{margin-top:2px}
+
+  @media(max-width:1050px){
+    .rcols{grid-template-columns:1fr}
+    .rside{order:-1}
+    .rstatrow{grid-template-columns:1fr 1fr}
+  }
   @media(max-width:900px){
     aside{display:none} .fgrid{grid-template-columns:1fr} #q{width:100%}
     .rd-side{width:250px}
+    .appnav{overflow-x:auto;padding:0 10px}
+    .navfuture{display:none}
+    .research-view{padding:16px 12px 50px}
+    .rhead{flex-direction:column;gap:10px}
+    .ractions{margin-left:0}
+    .rstatrow{grid-template-columns:1fr 1fr}
+    .rsetup .rf,.roppbar .rf{min-width:calc(50% - 10px)}
+    .ropplist{grid-template-columns:1fr}
   }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">论文汇总与对比平台<span>PDF 自动解析 · 分类 · 筛选 · 并排对比</span></div>
+  <div class="logo">研知引擎 PaperHub<span>多文献证据融合 · 争议地图 · 研究机会</span></div>
   <div class="spacer"></div>
   <span id="status" class="status"></span>
   <button class="btn" id="btnImport">导入备份</button>
@@ -362,7 +500,15 @@
   <button class="btn primary" id="btnCompare">对比 (0)</button>
 </header>
 
-<div class="wrap">
+<nav class="appnav" id="appnav">
+  <button data-view="library" class="on">文献库</button>
+  <button data-view="claims">争议地图</button>
+  <button data-view="opportunities">研究机会</button>
+  <span class="spacer"></span>
+  <span class="navfuture">研究设计 · 证据审计（P2 规划中）</span>
+</nav>
+
+<div class="wrap" id="viewLibrary">
   <!-- 侧栏 -->
   <aside>
     <div class="side-sec">
@@ -438,7 +584,15 @@
       <div class="spacer"></div>
       <button class="btn sm" id="btnSelAll">全选当前</button>
       <button class="btn sm" id="btnSelNone">清空勾选</button>
+      <button class="btn sm" id="btnFulltext" title="对勾选文献按页抽取全文，写入本地 IndexedDB">全文抽取</button>
       <button class="btn sm" id="btnAiExtract" title="用 AI 抽取勾选文献的深度字段">AI 抽取所选</button>
+    </div>
+
+    <div class="ftbar" id="ftbar" style="display:none">
+      <span class="ftlabel" id="ftLabel">正在抽取全文…</span>
+      <div class="ftprog"><i id="ftFill"></i></div>
+      <span class="ftpct" id="ftPct">0%</span>
+      <button class="btn sm" id="ftCancel">取消</button>
     </div>
 
     <!-- 解析规则升级后旧数据不会自动变，这里提示一句 -->
@@ -460,6 +614,83 @@
     </div>
   </main>
 </div>
+
+<!-- 争议地图 -->
+<section class="research-view" id="viewClaims">
+  <div class="rwrap">
+    <div class="rhead">
+      <div>
+        <div class="rkicker">RESEARCH INTELLIGENCE / P1</div>
+        <h2>学术观点争议地图</h2>
+        <p>把文献中的主张拆成结构化观点，区分支持、反对与条件差异。每条观点必须能回到原文页码。</p>
+      </div>
+      <div class="ractions">
+        <button class="btn primary" id="btnClaimNew">新建观点</button>
+        <button class="btn" id="btnClaimGuide">从检阅模式取观点</button>
+      </div>
+    </div>
+
+    <div class="rpanel rsetup">
+      <label class="rf"><span>研究问题</span><input id="rqInput" placeholder="例如：实物补偿模式如何影响变电站迁改进度风险？"></label>
+      <label class="rf"><span>研究对象</span><input id="rqObject" placeholder="如：220kV 变电站迁改"></label>
+      <label class="rf"><span>行业 / 场景</span><input id="rqIndustry" placeholder="如：电网基建"></label>
+      <label class="rf"><span>时间范围</span><input id="rqTime" placeholder="如：2018—2025"></label>
+      <label class="rf"><span>情境条件</span><input id="rqContext" placeholder="如：实物补偿、业主方视角"></label>
+      <button class="btn primary" id="rqSave">保存研究设定</button>
+      <span class="rq-papers" id="rqPapers">当前纳入 0 篇</span>
+      <button class="btn sm" id="rqScopeAll" title="清除文献库勾选，改为纳入全部文献">纳入全部</button>
+    </div>
+
+    <div class="rstatrow" id="claimStats"></div>
+
+    <div class="rcols">
+      <div class="rmain">
+        <div class="rbar">
+          <h3>观点列表</h3>
+          <div class="spacer"></div>
+          <select id="claimStance"><option value="">全部立场</option><option value="support">支持</option><option value="oppose">反对</option><option value="conditional">条件不同</option><option value="unknown">证据不足</option></select>
+          <select id="claimPaper"><option value="">全部文献</option></select>
+        </div>
+        <div class="rlist" id="claimList"></div>
+      </div>
+      <aside class="rside">
+        <h3>文献 × 立场覆盖</h3>
+        <div id="claimMatrix" class="rmatrix"></div>
+        <div class="rnote">
+          本图只反映“当前导入文献库内”的观点分布，不代表全领域研究结论。条件不同（对象、场景、时间、方法）不自动判为矛盾。
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- 研究机会 -->
+<section class="research-view" id="viewOpportunities">
+  <div class="rwrap">
+    <div class="rhead">
+      <div>
+        <div class="rkicker">RESEARCH OPPORTUNITY / P1</div>
+        <h2>科研空白候选雷达</h2>
+        <p>从库内观点冲突、条件差异与证据缺口生成候选研究机会。每张卡片都绑定证据，不宣称“全领域首创”。</p>
+      </div>
+      <div class="ractions">
+        <button class="btn primary" id="btnOppGenerate">从观点生成候选</button>
+        <button class="btn" id="btnOppNew">新建卡片</button>
+        <button class="btn" id="btnOppExport">导出 JSON</button>
+        <button class="btn" id="btnOppMd">导出 Markdown</button>
+      </div>
+    </div>
+
+    <div class="rpanel roppbar">
+      <label class="rf"><span>按研究问题筛选</span><input id="oppFilterQ" placeholder="输入关键词"></label>
+      <select id="oppFilterType"><option value="">全部类型</option><option value="theory">理论</option><option value="method">方法</option><option value="context">情境</option><option value="data">数据</option><option value="practice">实践</option></select>
+      <select id="oppFilterStatus"><option value="">全部状态</option><option value="draft">草案</option><option value="saved">已收藏</option></select>
+      <span class="rq-papers" id="oppCount">0 张卡片</span>
+    </div>
+
+    <div class="ropplist" id="oppList"></div>
+  </div>
+</section>
 
 <!-- 对比抽屉 -->
 <div class="mask" id="mask"></div>
@@ -508,7 +739,7 @@
         </div>
         <div class="fld"><label>API Key</label>
           <input type="password" id="aiKey" placeholder="sk-...">
-          <div class="hint">只存在你自己的浏览器里，不会上传到本项目的仓库或服务器</div>
+          <div class="hint">只保存在当前页面内存，刷新后需重新填写；不会写入代码、备份或服务器</div>
         </div>
         <div class="fld"><label>模型名</label>
           <input type="text" id="aiModel" placeholder="deepseek-chat">
@@ -521,6 +752,79 @@
       <div class="spacer"></div>
       <button class="btn" id="aiCancel">取消</button>
       <button class="btn primary" id="aiSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 观点编辑 -->
+<div class="modal" id="claimModal">
+  <div class="mbox" style="width:min(760px,94vw)">
+    <div class="mhead"><h3 id="clTitle">新建观点</h3><button class="x" id="clClose">×</button></div>
+    <div class="mbody">
+      <div class="fgrid">
+        <div class="fld full"><label>观点主张（用自己的话概括，可检验）</label><textarea id="clText" rows="3" placeholder="例如：在实物补偿模式下，前期补偿谈判是进度风险的首要来源。"></textarea></div>
+        <div class="fld"><label>立场</label><select id="clStance"><option value="support">支持</option><option value="oppose">反对</option><option value="conditional">条件不同</option><option value="unknown">证据不足 / 未判断</option></select></div>
+        <div class="fld"><label>研究对象</label><input id="clObject" placeholder="对象、样本或项目类型"></div>
+        <div class="fld"><label>范围条件</label><input id="clScope" placeholder="行业、地区、时间、情境"></div>
+        <div class="fld"><label>方法 / 证据类型</label><input id="clMethod" placeholder="如：案例研究、问卷、AHP"></div>
+        <div class="fld"><label>来源文献</label><select id="clPaper"></select></div>
+        <div class="fld"><label>页码</label><input type="number" id="clPage" min="1" placeholder="如 12"></div>
+        <div class="fld full"><label>原文摘录（证据）</label><textarea id="clQuote" rows="3" placeholder="从 PDF 原文摘录，不能编造"></textarea></div>
+        <div class="fld full"><label>我的备注</label><textarea id="clNote" rows="2" placeholder="为什么这样判断、需要补充什么"></textarea></div>
+      </div>
+      <div class="calloutline" id="clEvidenceHint">没有原文证据也可以先保存为“待确认”，但研究机会与写作引用只应使用能回到原文的观点。</div>
+    </div>
+    <div class="mfoot">
+      <button class="btn danger" id="clDelete" style="display:none">删除</button>
+      <div class="spacer"></div>
+      <button class="btn" id="clCancel">取消</button>
+      <button class="btn primary" id="clSave">保存观点</button>
+    </div>
+  </div>
+</div>
+
+<!-- 研究机会编辑 -->
+<div class="modal" id="oppModal">
+  <div class="mbox" style="width:min(760px,94vw)">
+    <div class="mhead"><h3 id="opTitle">新建研究机会</h3><button class="x" id="opClose">×</button></div>
+    <div class="mbody">
+      <div class="fgrid">
+        <div class="fld full"><label>卡片标题</label><input id="opTitleInput" placeholder="一句话说明这个候选机会"></div>
+        <div class="fld full"><label>候选研究问题</label><textarea id="opRQ" rows="2" placeholder="写成可检验的问题，而不是结论"></textarea></div>
+        <div class="fld"><label>机会类型</label><select id="opType"><option value="theory">理论</option><option value="method">方法</option><option value="context">情境</option><option value="data">数据</option><option value="practice">实践</option></select></div>
+        <div class="fld"><label>证据强度（可解释标签）</label><select id="opConfidence"><option value="needs_evidence">证据不足 / 需补充文献</option><option value="weak">弱：库内少量线索</option><option value="medium">中：存在多篇相关证据</option><option value="strong">较强：存在明确对立或条件差异</option></select></div>
+        <div class="fld"><label>状态</label><select id="opStatus"><option value="draft">草案</option><option value="saved">已收藏</option></select></div>
+        <div class="fld"><label>关联观点</label><div class="mini" id="opClaims"></div></div>
+        <div class="fld full"><label>限制条件 / 反向证据</label><textarea id="opLimit" rows="2" placeholder="哪些条件下这个判断可能不成立？已有哪些相近研究？"></textarea></div>
+        <div class="fld full"><label>待补检索词</label><input id="opSearch" placeholder="用逗号分隔，例如：实物补偿, 变电站迁建, 进度风险"></div>
+        <div class="fld full"><label>备注</label><textarea id="opNote" rows="2"></textarea></div>
+      </div>
+      <div class="calloutline">提示：本卡片只代表“当前导入文献库内的观察”，不代表全领域检索结论，也不能写成“从未研究”。</div>
+    </div>
+    <div class="mfoot">
+      <button class="btn danger" id="opDelete" style="display:none">删除</button>
+      <div class="spacer"></div>
+      <button class="btn" id="opCancel">取消</button>
+      <button class="btn primary" id="opSave">保存卡片</button>
+    </div>
+  </div>
+</div>
+
+<!-- 存储迁移 -->
+<div class="modal" id="migrateModal">
+  <div class="mbox" style="width:min(540px,94vw)">
+    <div class="mhead"><h3>升级本地数据存储</h3></div>
+    <div class="mbody">
+      <p style="margin-bottom:10px">检测到旧版本保存在浏览器 localStorage 的文献库。新版本改用 IndexedDB，以保存 PDF 原文、逐页全文和证据数据。</p>
+      <div class="calloutline">
+        迁移不会删除旧数据，迁移失败可回退。<b>建议先下载一份 JSON 备份</b>，再开始迁移。
+      </div>
+      <p class="mini" style="margin-top:10px">迁移内容：文献字段、批注、勾选状态。旧版 PDF 原文件如果不在浏览器缓存中，需要之后重新选择一次。</p>
+    </div>
+    <div class="mfoot">
+      <button class="btn" id="migrateBackup">先下载备份并迁移</button>
+      <div class="spacer"></div>
+      <button class="btn primary" id="migrateNow">直接迁移</button>
     </div>
   </div>
 </div>
@@ -594,14 +898,17 @@
     <span class="pop-fill-t">或把这段原文写入：</span>
     <select id="popField"></select>
     <button class="btn sm" id="popFill">填充</button>
+    <button class="btn sm" id="popClaim" title="保存为争议地图中的一条观点">存为观点</button>
   </div>
 </div>
 
 <script src="vendor/xlsx.full.min.js"></script>
+<script src="db.js"></script>
 <script src="parser.js"></script>
 <script src="fields.js"></script>
 <script src="ai.js"></script>
 <script src="reader.js"></script>
+<script src="research.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

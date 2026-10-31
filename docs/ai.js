@@ -13,12 +13,24 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
 
   const CFG_KEY = 'paperhub.ai.v1';
+  // 只保存在当前页面内存里：刷新即失效，不落 localStorage，避免密钥随备份/浏览器数据泄露
+  let memoryKey = '';
 
   function getCfg() {
-    try { return JSON.parse(localStorage.getItem(CFG_KEY) || '{}'); }
-    catch (e) { return {}; }
+    try {
+      const c = JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
+      // 兼容旧版本：如果 localStorage 里还残留 key，直接忽略，不再使用
+      delete c.key;
+      return Object.assign(c, { key: memoryKey });
+    } catch (e) { return { key: memoryKey }; }
   }
-  function setCfg(c) { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
+  function setCfg(c) {
+    const cfg = c || {};
+    memoryKey = String(cfg.key || '');
+    // 持久化只保留 base/model，不写 key
+    try { localStorage.setItem(CFG_KEY, JSON.stringify({ base: cfg.base || '', model: cfg.model || '' })); }
+    catch (e) { }
+  }
   function isReady() {
     const c = getCfg();
     return !!(c.key && c.model);
