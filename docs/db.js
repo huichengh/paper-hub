@@ -11,7 +11,7 @@
   'use strict';
 
   const DB_NAME = 'paperhub-os';
-  const DB_VER = 2;
+  const DB_VER = 3;
   const STORES = {
     papers: { keyPath: 'id', indexes: [['addedAt', 'addedAt']] },
     pdfFiles: { keyPath: 'id' },
@@ -19,6 +19,8 @@
     annotations: { keyPath: 'paperId' },
     claims: { keyPath: 'id', indexes: [['question', 'question'], ['paperId', 'paperId'], ['stance', 'stance']] },
     opportunities: { keyPath: 'id', indexes: [['question', 'question']] },
+    researchProjects: { keyPath: 'id', indexes: [['question', 'question']] },
+    auditResults: { keyPath: 'id', indexes: [['question', 'question']] },
     settings: { keyPath: 'key' },
     meta: { keyPath: 'key' }
   };
@@ -140,14 +142,16 @@
    */
   async function saveSnapshot(snap) {
     const s = snap || {};
-    const names = ['papers', 'annotations', 'claims', 'opportunities', 'settings'];
+    const names = ['papers', 'annotations', 'claims', 'opportunities', 'researchProjects', 'auditResults', 'settings'];
     const t = requireDb().transaction(names, 'readwrite');
     const ps = t.objectStore('papers');
     const as = t.objectStore('annotations');
     const cs = t.objectStore('claims');
     const os = t.objectStore('opportunities');
+    const rp = t.objectStore('researchProjects');
+    const au = t.objectStore('auditResults');
     const ss = t.objectStore('settings');
-    ps.clear(); as.clear(); cs.clear(); os.clear(); ss.clear();
+    ps.clear(); as.clear(); cs.clear(); os.clear(); rp.clear(); au.clear(); ss.clear();
     (s.papers || []).forEach(p => ps.put(p));
     Object.keys(s.annotations || {}).forEach(pid => {
       const items = s.annotations[pid];
@@ -155,18 +159,24 @@
     });
     (s.claims || []).forEach(c => cs.put(c));
     (s.opportunities || []).forEach(o => os.put(o));
+    (s.projects || []).forEach(p => rp.put(p));
+    (s.audits || []).forEach(a => au.put(a));
     ss.put({ key: 'ui', value: { sel: s.sel || [], researchQuestion: s.researchQuestion || '', conditions: s.conditions || {}, view: s.view || 'library' } });
     await txDone(t);
   }
 
   async function loadSnapshot() {
-    const [papers, anns, claims, opps, ui] = await Promise.all([
+    const [papers, anns, claims, opps, projects, audits, ui] = await Promise.all([
       getAll('papers'), getAll('annotations'), getAll('claims'), getAll('opportunities'),
+      getAll('researchProjects'), getAll('auditResults'),
       getSetting('ui', {})
     ]);
     const annotations = {};
     anns.forEach(r => { if (r && r.paperId) annotations[r.paperId] = r.items || []; });
-    return { papers: papers || [], annotations, claims: claims || [], opportunities: opps || [], ui: ui || {} };
+    return {
+      papers: papers || [], annotations, claims: claims || [], opportunities: opps || [],
+      projects: projects || [], audits: audits || [], ui: ui || {}
+    };
   }
 
   // ---------- 迁移 ----------
@@ -174,11 +184,13 @@
     const d = legacy || {};
     const papers = Array.isArray(d.papers) ? d.papers : [];
     const annotations = (d.annotations && typeof d.annotations === 'object') ? d.annotations : {};
-    const t = requireDb().transaction(['papers', 'annotations', 'claims', 'opportunities', 'settings', 'meta'], 'readwrite');
+    const t = requireDb().transaction(['papers', 'annotations', 'claims', 'opportunities', 'researchProjects', 'auditResults', 'settings', 'meta'], 'readwrite');
     const ps = t.objectStore('papers');
     const as = t.objectStore('annotations');
     const cs = t.objectStore('claims');
     const os = t.objectStore('opportunities');
+    const rp = t.objectStore('researchProjects');
+    const au = t.objectStore('auditResults');
     const ss = t.objectStore('settings');
     const ms = t.objectStore('meta');
     papers.forEach(p => { if (p && p.id) ps.put(p); });
@@ -188,6 +200,8 @@
     });
     (Array.isArray(d.claims) ? d.claims : []).forEach(c => { if (c && c.id) cs.put(c); });
     (Array.isArray(d.opportunities) ? d.opportunities : []).forEach(o => { if (o && o.id) os.put(o); });
+    (Array.isArray(d.projects) ? d.projects : []).forEach(p => { if (p && p.id) rp.put(p); });
+    (Array.isArray(d.audits) ? d.audits : []).forEach(a => { if (a && a.id) au.put(a); });
     ss.put({ key: 'ui', value: { sel: Array.isArray(d.sel) ? d.sel : [], researchQuestion: (d.research && d.research.question) || '', conditions: (d.research && d.research.conditions) || {}, view: 'library' } });
     ms.put({ key: 'migration', value: { done: true, at: new Date().toISOString(), papers: papers.length, from: 'localStorage:paperhub.v1' } });
     await txDone(t);
@@ -273,7 +287,7 @@
 
   // 只清文献相关数据，保留迁移标记、设置与 AI 配置
   async function clearLibrary() {
-    const names = ['papers', 'pdfFiles', 'pageTexts', 'annotations', 'claims', 'opportunities'];
+    const names = ['papers', 'pdfFiles', 'pageTexts', 'annotations', 'claims', 'opportunities', 'researchProjects', 'auditResults'];
     const t = requireDb().transaction(names, 'readwrite');
     names.forEach(n => t.objectStore(n).clear());
     await txDone(t);

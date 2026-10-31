@@ -468,6 +468,74 @@
   .mini .ck{display:flex;align-items:flex-start;gap:6px;padding:3px 0;font-size:11.5px;color:var(--txt2)}
   .mini .ck input{margin-top:2px}
 
+  /* ---------- 研究设计 ---------- */
+  .designcols{display:grid;grid-template-columns:270px minmax(0,1fr);gap:14px;align-items:start}
+  .design-list{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;position:sticky;top:56px}
+  .design-list .rbar{border-bottom:1px solid var(--line)}
+  .design-item{padding:10px 12px;border-bottom:1px solid var(--line2);cursor:pointer}
+  .design-item:last-child{border-bottom:0}
+  .design-item:hover{background:#f8fbfd}
+  .design-item.on{background:var(--teal-soft);border-left:3px solid var(--teal)}
+  .design-item b{display:block;font-size:12.2px;line-height:1.5;color:#20394e;margin-bottom:2px}
+  .design-item span{font-size:10.5px;color:var(--txt3)}
+  .design-main{background:var(--panel);border:1px solid var(--line);border-radius:8px;min-height:420px;padding:16px 18px}
+  .design-empty{padding:70px 30px;text-align:center;color:var(--txt3);line-height:1.9}
+  .design-head{display:flex;align-items:flex-start;gap:10px;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:12px}
+  .design-head h3{font-size:16px;line-height:1.5;color:#163247;flex:1}
+  .design-head .meta{font-size:11px;color:var(--txt3);margin-top:4px}
+  .design-draft{background:#fff8ec;color:#8a5206;border:1px solid #f0d4a6;border-radius:5px;padding:6px 10px;font-size:11.5px;margin-bottom:12px}
+  .dsec{border-top:1px solid var(--line2);padding:12px 0 4px}
+  .dsec:first-of-type{border-top:0}
+  .dsec-h{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .dsec-h b{font-size:12.5px;color:#263442}
+  .dsec-h .src{margin-left:auto;font-size:10.5px;border:1px solid var(--line);border-radius:5px;padding:1px 5px;background:#fff;color:var(--txt2)}
+  .dsec textarea,.dsec input{width:100%;border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-size:12.5px;line-height:1.65;background:#fff}
+  .dsec textarea{resize:vertical;min-height:54px}
+  .dsec .hint{font-size:10.5px;color:var(--txt3);margin-top:3px}
+  .dgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}
+  .dgrid .full{grid-column:1/-1}
+  .dfield label{display:block;font-size:10.5px;color:var(--txt3);margin-bottom:3px}
+  .table-scroll{overflow-x:auto}
+  .methods-table{width:100%;min-width:640px;border-collapse:collapse;font-size:11.5px}
+  .methods-table th,.methods-table td{border:1px solid var(--line);padding:6px;vertical-align:top}
+  .methods-table textarea{min-height:50px;border:0;padding:2px;font-size:11.5px;width:100%;background:transparent}
+  .methods-table th{background:#f7f9fc;font-weight:600;color:var(--txt2)}
+  .method-add{margin-top:6px}
+  .design-actions{display:flex;gap:7px;flex-wrap:wrap;border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+  .design-actions .spacer{flex:1}
+
+  /* ---------- 证据审计 ---------- */
+  .audit-input{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:13px}
+  .audit-input textarea{width:100%;border:1px solid var(--line);border-radius:6px;padding:9px 11px;font-size:12.5px;line-height:1.75;resize:vertical}
+  .audit-meta{font-size:11px;color:var(--txt3);margin-top:7px}
+  .audit-list{display:flex;flex-direction:column;gap:9px}
+  .audit-item{background:#fff;border:1px solid var(--line);border-left:3px solid #94a3b8;border-radius:7px;padding:11px 13px}
+  .audit-item.support{border-left-color:var(--teal)}
+  .audit-item.partial{border-left-color:#d97706}
+  .audit-item.conflict{border-left-color:var(--danger)}
+  .audit-item.none{border-left-color:#94a3b8}
+  .audit-head{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
+  .audit-head .txt{font-size:12.8px;line-height:1.7;color:#253b4d;flex:1;min-width:260px}
+  .verdict{font-size:10.5px;border-radius:10px;padding:1px 7px;white-space:nowrap}
+  .verdict.support{background:var(--teal-soft);color:#0f6b62}
+  .verdict.partial{background:var(--warn-soft);color:#9a5b06}
+  .verdict.conflict{background:var(--danger-soft);color:var(--danger)}
+  .verdict.none{background:#eef1f5;color:#64748b}
+  .verdict-select{font-size:11px;border:1px solid var(--line);border-radius:5px;padding:2px 4px;background:#fff}
+  .audit-evs{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+  .audit-ev{background:#f8fbfd;border:1px dashed var(--line);border-radius:5px;padding:6px 9px;font-size:11.3px;line-height:1.65;color:#435569}
+  .audit-ev b{color:#24435c}
+  .audit-ev .ev-link{color:var(--acc);cursor:pointer;font-size:10.5px;margin-left:5px}
+  .audit-sug{margin-top:7px;font-size:11.5px;color:#6b5326;background:#fffaf0;border-radius:4px;padding:6px 8px}
+  .audit-cov{font-size:10.5px;color:var(--txt3);margin-top:6px}
+  .audit-empty{padding:50px 20px;text-align:center;color:var(--txt3);line-height:1.9;border:1px dashed var(--line);border-radius:8px;background:#fcfdff}
+
+  @media(max-width:1050px){
+    .designcols{grid-template-columns:1fr}
+    .design-list{position:static;order:0}
+    .dgrid{grid-template-columns:1fr}
+  }
+
   @media(max-width:1050px){
     .rcols{grid-template-columns:1fr}
     .rside{order:-1}
@@ -504,8 +572,10 @@
   <button data-view="library" class="on">文献库</button>
   <button data-view="claims">争议地图</button>
   <button data-view="opportunities">研究机会</button>
+  <button data-view="design">研究设计</button>
+  <button data-view="audit">证据审计</button>
   <span class="spacer"></span>
-  <span class="navfuture">研究设计 · 证据审计（P2 规划中）</span>
+  <span class="navfuture">本地优先 · 证据可回溯</span>
 </nav>
 
 <div class="wrap" id="viewLibrary">
@@ -689,6 +759,58 @@
     </div>
 
     <div class="ropplist" id="oppList"></div>
+  </div>
+</section>
+
+<!-- 研究设计 -->
+<section class="research-view" id="viewDesign">
+  <div class="rwrap">
+    <div class="rhead">
+      <div>
+        <div class="rkicker">RESEARCH DESIGN / P2</div>
+        <h2>研究方案生成器</h2>
+        <p>把候选研究机会转成研究蓝图。每一部分标明来源：文献、基于文献的推断、或你的手工填写；未确认内容一律标为草案。</p>
+      </div>
+      <div class="ractions">
+        <button class="btn primary" id="btnDesignNew">新建方案</button>
+        <button class="btn" id="btnDesignFromOpp">从机会生成</button>
+        <button class="btn" id="btnDesignExport">导出当前方案</button>
+      </div>
+    </div>
+    <div class="designcols">
+      <aside class="design-list">
+        <div class="rbar"><h3>方案列表</h3><span class="spacer"></span><span class="mini" id="designCount">0 份</span></div>
+        <div id="designList"></div>
+      </aside>
+      <div class="design-main" id="designEditor"></div>
+    </div>
+  </div>
+</section>
+
+<!-- 证据审计 -->
+<section class="research-view" id="viewAudit">
+  <div class="rwrap">
+    <div class="rhead">
+      <div>
+        <div class="rkicker">EVIDENCE AUDIT / P2</div>
+        <h2>论文证据链审计</h2>
+        <p>粘贴一段综述或开题文本，按句拆分并与当前库内观点/原文证据匹配。初判只是候选，必须人工复核；未找到证据不等于结论错误。</p>
+      </div>
+      <div class="ractions">
+        <button class="btn primary" id="btnAuditRun">开始审计</button>
+        <button class="btn" id="btnAuditExport">导出 Markdown</button>
+        <button class="btn" id="btnAuditJson">导出 JSON</button>
+      </div>
+    </div>
+    <div class="audit-input">
+      <div class="rbar" style="padding:0 0 9px;border:0">
+        <h3>待审文本</h3><span class="spacer"></span>
+        <select id="auditHistory" title="历史审计"><option value="">历史审计…</option></select>
+      </div>
+      <textarea id="auditText" rows="6" placeholder="粘贴你的综述/开题段落。系统按中文句号、分号、换行拆成可核验主张；不会自动修改原文。"></textarea>
+      <div class="audit-meta" id="auditMeta">当前证据基础：尚未审计</div>
+    </div>
+    <div class="audit-list" id="auditList"></div>
   </div>
 </section>
 
@@ -909,6 +1031,7 @@
 <script src="ai.js"></script>
 <script src="reader.js"></script>
 <script src="research.js"></script>
+<script src="design.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

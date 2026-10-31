@@ -438,6 +438,12 @@
     }
 
     const act = el('div', 'opp-act');
+    const bdg = el('button', 'btn', '转为研究方案');
+    bdg.onclick = () => {
+      if (window.PaperDesign) window.PaperDesign.createFromOpportunity(o);
+      else toast('研究设计模块未加载');
+    };
+    act.appendChild(bdg);
     const be = el('button', 'btn', '编辑');
     be.onclick = () => openOpp(o);
     act.appendChild(be);

@@ -28,6 +28,8 @@
   // P1：观点与研究机会
   let claims = [];
   let opportunities = [];
+  let projects = [];
+  let audits = [];
   let settings = { researchQuestion: '', conditions: {}, view: 'library' };
   let currentView = 'library';
   // 存储状态
@@ -76,7 +78,7 @@
 
   function snapshot() {
     return {
-      papers, annotations, claims, opportunities, sel: [...sel],
+      papers, annotations, claims, opportunities, projects, audits, sel: [...sel],
       researchQuestion: settings.researchQuestion || '',
       conditions: settings.conditions || {},
       view: currentView
@@ -87,14 +89,14 @@
   function saveLegacy() {
     try {
       localStorage.setItem(KEY, JSON.stringify({
-        papers, sel: [...sel], annotations, claims, opportunities,
+        papers, sel: [...sel], annotations, claims, opportunities, projects, audits,
         research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} }
       }));
     } catch (e) {
       try {
         const lite = papers.map(p => Object.assign({}, p, { abstract: (p.abstract || '').slice(0, 200) }));
         localStorage.setItem(KEY, JSON.stringify({
-          papers: lite, sel: [...sel], annotations, claims, opportunities,
+          papers: lite, sel: [...sel], annotations, claims, opportunities, projects, audits,
           research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} }
         }));
         toast('存储空间不足，已精简摘要后保存');
@@ -132,15 +134,18 @@
         annotations: (d.annotations && typeof d.annotations === 'object') ? d.annotations : {},
         claims: Array.isArray(d.claims) ? d.claims : [],
         opportunities: Array.isArray(d.opportunities) ? d.opportunities : [],
+        projects: Array.isArray(d.projects) ? d.projects : [],
+        audits: Array.isArray(d.audits) ? d.audits : [],
         research: d.research || {}
       };
-    } catch (e) { return { papers: [], sel: [], annotations: {}, claims: [], opportunities: [], research: {} }; }
+    } catch (e) { return { papers: [], sel: [], annotations: {}, claims: [], opportunities: [], projects: [], audits: [], research: {} }; }
   }
 
   function loadLegacy() {
     const d = readLegacy();
     papers = d.papers; sel = new Set(d.sel); annotations = d.annotations;
     claims = d.claims || []; opportunities = d.opportunities || [];
+    projects = d.projects || []; audits = d.audits || [];
     settings = {
       researchQuestion: (d.research && d.research.question) || '',
       conditions: (d.research && d.research.conditions) || {},
@@ -156,6 +161,8 @@
     annotations = snap.annotations || {};
     claims = snap.claims || [];
     opportunities = snap.opportunities || [];
+    projects = snap.projects || [];
+    audits = snap.audits || [];
     const ui = snap.ui || {};
     sel = new Set(Array.isArray(ui.sel) ? ui.sel : []);
     settings = {
@@ -1059,11 +1066,11 @@
   }
   function exportBackup() {
     const data = JSON.stringify({
-      v: 3,
+      v: 4,
       app: 'PaperHub Research OS',
-      papers, sel: [...sel], annotations, claims, opportunities,
+      papers, sel: [...sel], annotations, claims, opportunities, projects, audits,
       research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} },
-      note: '备份包含文献字段、批注、观点与研究机会；不包含 PDF 原文与逐页全文缓存。',
+      note: '备份包含文献字段、批注、观点、研究机会、研究方案与审计结果；不包含 PDF 原文与逐页全文缓存。',
       at: new Date().toISOString()
     }, null, 1);
     dl(new Blob([data], { type: 'application/json' }), '论文库备份_' + new Date().toISOString().slice(0, 10) + '.json');
@@ -1074,7 +1081,7 @@
     fr.onload = () => {
       try {
         const d = JSON.parse(fr.result);
-        if (d && d.v && +d.v > 3) {
+        if (d && d.v && +d.v > 4) {
           toast('这份备份来自更高版本（v' + d.v + '），将尝试导入，未知字段会被忽略');
         }
         const inc = Array.isArray(d.papers) ? d.papers : [];
@@ -1128,7 +1135,7 @@
         // P1：观点与研究机会随备份迁移；paperId / claimId 需要重新映射
         const incClaims = Array.isArray(d.claims) ? d.claims : ((d.research && Array.isArray(d.research.claims)) ? d.research.claims : []);
         const incOpps = Array.isArray(d.opportunities) ? d.opportunities : ((d.research && Array.isArray(d.research.opportunities)) ? d.research.opportunities : []);
-        const claimMap = {};
+        const claimMap = {}, oppMap = {};
         let claimN = 0, oppN = 0;
         incClaims.forEach(c => {
           if (!c || typeof c !== 'object') return;
@@ -1152,7 +1159,36 @@
           copy.claimIds = (o.claimIds || []).map(id => claimMap[id]).filter(Boolean);
           copy.paperIds = [...new Set(copy.claimIds.map(id => (claims.find(c => c.id === id) || {}).paperId).filter(Boolean))];
           copy.updatedAt = new Date().toISOString();
-          opportunities.push(copy); oppN++;
+          opportunities.push(copy);
+          if (o.id) oppMap[o.id] = copy.id;
+          oppN++;
+        });
+        // P2：研究方案与审计结果随备份迁移，证据/论文/观点 id 一并重映射
+        const incProjects = Array.isArray(d.projects) ? d.projects : [];
+        const incAudits = Array.isArray(d.audits) ? d.audits : [];
+        let projectN = 0, auditN = 0;
+        incProjects.forEach(pj => {
+          if (!pj || typeof pj !== 'object') return;
+          const copy = Object.assign({}, pj);
+          copy.id = uid('pr');
+          copy.opportunityId = pj.opportunityId ? (oppMap[pj.opportunityId] || '') : '';
+          copy.claimIds = (pj.claimIds || []).map(id => claimMap[id]).filter(Boolean);
+          copy.paperIds = (pj.paperIds || []).map(id => idMap[id]).filter(Boolean);
+          copy.updatedAt = new Date().toISOString();
+          projects.push(copy); projectN++;
+        });
+        incAudits.forEach(au => {
+          if (!au || typeof au !== 'object') return;
+          const copy = Object.assign({}, au);
+          copy.id = uid('au');
+          copy.items = (au.items || []).map(it => Object.assign({}, it, {
+            evidence: (it.evidence || []).map(ev => Object.assign({}, ev, {
+              paperId: ev.paperId ? (idMap[ev.paperId] || '') : '',
+              claimId: ev.claimId ? (claimMap[ev.claimId] || '') : ''
+            })).filter(ev => ev.paperId || ev.quote)
+          }));
+          copy.createdAt = copy.createdAt || new Date().toISOString();
+          audits.push(copy); auditN++;
         });
         // 原备份里勾选的论文，恢复后尽量保持勾选状态
         if (Array.isArray(d.sel)) d.sel.forEach(oldId => { if (idMap[oldId]) sel.add(idMap[oldId]); });
@@ -1166,6 +1202,8 @@
         if (annN) parts.push(`恢复批注 ${annN} 条`);
         if (claimN) parts.push(`恢复观点 ${claimN} 条`);
         if (oppN) parts.push(`恢复机会 ${oppN} 张`);
+        if (projectN) parts.push(`恢复研究方案 ${projectN} 份`);
+        if (auditN) parts.push(`恢复审计 ${auditN} 份`);
         toast(parts.join('，') || '没有可导入的内容');
       } catch (e) { toast('备份文件解析失败'); }
     };
@@ -1174,13 +1212,17 @@
 
   // ---------- 视图切换 ----------
   function switchView(view, silent) {
-    const v = ['library', 'claims', 'opportunities'].includes(view) ? view : 'library';
+    const v = ['library', 'claims', 'opportunities', 'design', 'audit'].includes(view) ? view : 'library';
     currentView = v;
     document.querySelectorAll('#appnav button[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === v));
     $('viewLibrary').classList.toggle('hide', v !== 'library');
     $('viewClaims').classList.toggle('on', v === 'claims');
     $('viewOpportunities').classList.toggle('on', v === 'opportunities');
+    $('viewDesign').classList.toggle('on', v === 'design');
+    $('viewAudit').classList.toggle('on', v === 'audit');
     if ((v === 'claims' || v === 'opportunities') && window.ResearchOS) window.ResearchOS.renderAll();
+    if (v === 'design' && window.PaperDesign) window.PaperDesign.renderAll();
+    if (v === 'audit' && window.PaperAudit) window.PaperAudit.renderAll();
     if (!silent) {
       save();
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1192,13 +1234,14 @@
     if (!dbReady || !window.PaperDB) { toast('当前浏览器不支持 IndexedDB，继续使用旧存储'); return; }
     try {
       await window.PaperDB.migrateLegacy({
-        papers, annotations, claims, opportunities, sel: [...sel],
+        papers, annotations, claims, opportunities, projects, audits, sel: [...sel],
         research: { question: settings.researchQuestion || '', conditions: settings.conditions || {} }
       });
       useLegacy = false;
       await loadFromDB();
       $('migrateModal').classList.remove('on');
       if (window.ResearchOS) window.ResearchOS.renderAll();
+      if (window.PaperDesign) window.PaperDesign.renderAll();
       switchView(settings.view || 'library', true);
       render();
       toast('数据已迁移到 IndexedDB，旧数据仍保留在 localStorage 作为回退');
@@ -1236,11 +1279,12 @@
       if (!confirm('确定清空全部 ' + papers.length + ' 篇文献？建议先「导出备份」。')) return;
       papers = []; sel.clear(); cat = '';
       // 批注、观点、PDF 内存缓存都一起清，避免留下孤儿数据
-      annotations = {}; claims = []; opportunities = []; fileCache.clear();
+      annotations = {}; claims = []; opportunities = []; projects = []; audits = []; fileCache.clear();
       if (dbReady && window.PaperDB) {
         try { await window.PaperDB.clearLibrary(); } catch (e) { console.warn('清空本地库失败', e); }
       }
       if (window.ResearchOS) window.ResearchOS.renderAll();
+      if (window.PaperDesign) window.PaperDesign.renderAll();
       save(); render(); toast('已清空');
     };
     $('btnExport').onclick = exportXlsx;
@@ -1336,6 +1380,7 @@
       loadLegacy();
       bind(); initImportFlow(); initReader();
       window.ResearchOS.init(researchHooks());
+      window.PaperDesign.init(designHooks());
       switchView('library', true);
       render();
       toast('IndexedDB 不可用，已退回旧存储；全文与证据持久化将不可用');
@@ -1351,6 +1396,7 @@
       useLegacy = true;
       bind(); initImportFlow(); initReader();
       window.ResearchOS.init(researchHooks());
+      window.PaperDesign.init(designHooks());
       switchView('library', true);
       render();
       $('migrateModal').classList.add('on');
@@ -1368,6 +1414,7 @@
     }
     bind(); initImportFlow(); initReader();
     window.ResearchOS.init(researchHooks());
+    window.PaperDesign.init(designHooks());
     switchView(settings.view || 'library', true);
     render();
   }
@@ -1390,9 +1437,24 @@
     };
   }
 
+  function designHooks() {
+    return {
+      getPapers: () => papers,
+      getClaims: () => claims,
+      getOpps: () => opportunities,
+      getProjects: () => projects,
+      getAudits: () => audits,
+      getSettings: () => settings,
+      getSelected: () => [...sel],
+      setView: v => switchView(v),
+      save, toast,
+      openEvidence: (id, anchor, quote) => window.ReaderMode.open(id, { focus: anchor, quote })
+    };
+  }
+
   window.__papers = () => papers;
   window.__state = () => ({
-    papers, annotations, claims, opportunities, settings,
+    papers, annotations, claims, opportunities, projects, audits, settings,
     dbReady, useLegacy, currentView, selected: [...sel]
   });
   boot();
