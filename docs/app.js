@@ -1212,7 +1212,7 @@
 
   // ---------- 视图切换 ----------
   function switchView(view, silent) {
-    const v = ['library', 'claims', 'opportunities', 'design', 'audit'].includes(view) ? view : 'library';
+    const v = ['library', 'claims', 'opportunities', 'design', 'audit', 'assistant'].includes(view) ? view : 'library';
     currentView = v;
     document.querySelectorAll('#appnav button[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === v));
     $('viewLibrary').classList.toggle('hide', v !== 'library');
@@ -1220,9 +1220,11 @@
     $('viewOpportunities').classList.toggle('on', v === 'opportunities');
     $('viewDesign').classList.toggle('on', v === 'design');
     $('viewAudit').classList.toggle('on', v === 'audit');
+    $('viewAssistant').classList.toggle('on', v === 'assistant');
     if ((v === 'claims' || v === 'opportunities') && window.ResearchOS) window.ResearchOS.renderAll();
     if (v === 'design' && window.PaperDesign) window.PaperDesign.renderAll();
     if (v === 'audit' && window.PaperAudit) window.PaperAudit.renderAll();
+    if (v === 'assistant' && window.PaperAdvisor) window.PaperAdvisor.renderAll();
     if (!silent) {
       save();
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1285,6 +1287,7 @@
       }
       if (window.ResearchOS) window.ResearchOS.renderAll();
       if (window.PaperDesign) window.PaperDesign.renderAll();
+      if (window.PaperAdvisor) window.PaperAdvisor.renderAll();
       save(); render(); toast('已清空');
     };
     $('btnExport').onclick = exportXlsx;
@@ -1381,6 +1384,7 @@
       bind(); initImportFlow(); initReader();
       window.ResearchOS.init(researchHooks());
       window.PaperDesign.init(designHooks());
+    window.PaperAdvisor.init(assistantHooks());
       switchView('library', true);
       render();
       toast('IndexedDB 不可用，已退回旧存储；全文与证据持久化将不可用');
@@ -1397,6 +1401,7 @@
       bind(); initImportFlow(); initReader();
       window.ResearchOS.init(researchHooks());
       window.PaperDesign.init(designHooks());
+    window.PaperAdvisor.init(assistantHooks());
       switchView('library', true);
       render();
       $('migrateModal').classList.add('on');
@@ -1415,6 +1420,7 @@
     bind(); initImportFlow(); initReader();
     window.ResearchOS.init(researchHooks());
     window.PaperDesign.init(designHooks());
+    window.PaperAdvisor.init(assistantHooks());
     switchView(settings.view || 'library', true);
     render();
   }
@@ -1442,6 +1448,20 @@
       getPapers: () => papers,
       getClaims: () => claims,
       getOpps: () => opportunities,
+      getProjects: () => projects,
+      getAudits: () => audits,
+      getSettings: () => settings,
+      getSelected: () => [...sel],
+      setView: v => switchView(v),
+      save, toast,
+      openEvidence: (id, anchor, quote) => window.ReaderMode.open(id, { focus: anchor, quote })
+    };
+  }
+
+  function assistantHooks() {
+    return {
+      getPapers: () => papers,
+      getClaims: () => claims,
       getProjects: () => projects,
       getAudits: () => audits,
       getSettings: () => settings,

@@ -530,6 +530,42 @@
   .audit-cov{font-size:10.5px;color:var(--txt3);margin-top:6px}
   .audit-empty{padding:50px 20px;text-align:center;color:var(--txt3);line-height:1.9;border:1px dashed var(--line);border-radius:8px;background:#fcfdff}
 
+  /* ---------- 研究助手 ---------- */
+  .asgrid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;align-items:start}
+  .as-main{display:flex;flex-direction:column;gap:13px}
+  .as-side{display:flex;flex-direction:column;gap:13px}
+  .as-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px 15px}
+  .as-head{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+  .as-head h3{font-size:13.5px;color:#263442}
+  .as-head .mini{margin-left:auto}
+  .as-q{border-top:1px solid var(--line2);padding:9px 0 4px}
+  .as-q:first-child{border-top:0;padding-top:0}
+  .as-q .qt{font-size:12.5px;line-height:1.65;color:#253b4d;margin-bottom:3px}
+  .as-q .qc{font-size:10px;color:var(--txt3);margin-bottom:4px}
+  .as-q textarea{width:100%;border:1px solid var(--line);border-radius:5px;padding:5px 7px;font-size:11.5px;line-height:1.6;min-height:44px;resize:vertical}
+  .as-q .as-a-act{display:flex;gap:6px;margin-top:4px}
+  .as-q .as-a-act .btn{padding:1px 7px;font-size:10.5px}
+  .as-todo-add{display:flex;gap:6px;margin-bottom:4px}
+  .as-todo-add input{flex:1;border:1px solid var(--line);border-radius:5px;padding:5px 7px;font-size:11.5px}
+  .todo{display:flex;align-items:flex-start;gap:7px;padding:6px 0;border-bottom:1px solid var(--line2);font-size:12px;line-height:1.6}
+  .todo:last-child{border-bottom:0}
+  .todo input{margin-top:3px}
+  .todo.done span{text-decoration:line-through;color:var(--txt3)}
+  .todo .src{font-size:10px;color:var(--txt3);margin-left:4px}
+  .todo .del{margin-left:auto;color:var(--txt3)}
+  .transfer{border-bottom:1px solid var(--line2);padding:7px 0}
+  .transfer:last-child{border-bottom:0}
+  .transfer .name{font-size:12px;color:#263442;font-weight:600}
+  .transfer .src{font-size:10px;color:var(--txt3);margin:2px 0 4px}
+  .transfer select,.transfer input{width:100%;border:1px solid var(--line);border-radius:4px;padding:3px 5px;font-size:10.5px;margin-top:3px}
+  .cred{display:flex;align-items:flex-start;gap:6px;padding:6px 0;border-bottom:1px solid var(--line2);font-size:11px;line-height:1.55}
+  .cred:last-child{border-bottom:0}
+  .cred .ct{flex:1;color:#34495c;min-width:0}
+  .cred .ct b{display:block;font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cred .unv{font-size:10px;color:#9a5b06;background:var(--warn-soft);border-radius:8px;padding:0 5px;white-space:nowrap}
+  .cred a{font-size:10px;color:var(--acc);white-space:nowrap}
+  @media(max-width:1050px){.asgrid{grid-template-columns:1fr}}
+
   @media(max-width:1050px){
     .designcols{grid-template-columns:1fr}
     .design-list{position:static;order:0}
@@ -574,6 +610,7 @@
   <button data-view="opportunities">研究机会</button>
   <button data-view="design">研究设计</button>
   <button data-view="audit">证据审计</button>
+  <button data-view="assistant">研究助手</button>
   <span class="spacer"></span>
   <span class="navfuture">本地优先 · 证据可回溯</span>
 </nav>
@@ -814,6 +851,53 @@
   </div>
 </section>
 
+<!-- 研究助手 -->
+<section class="research-view" id="viewAssistant">
+  <div class="rwrap">
+    <div class="rhead">
+      <div>
+        <div class="rkicker">RESEARCH ASSISTANT / P3 本地版</div>
+        <h2>研究助手</h2>
+        <p>围绕已有研究方案生成答辩追问、待办、方法迁移候选与可信度状态。不调用模型，不伪造外部核验结果。</p>
+      </div>
+      <div class="ractions">
+        <select id="asProject" title="选择研究方案"></select>
+        <button class="btn primary" id="btnAsQuestions">生成答辩问题</button>
+        <button class="btn" id="btnAsExport">导出纪要</button>
+      </div>
+    </div>
+    <div class="asgrid">
+      <div class="as-main">
+        <div class="as-card">
+          <div class="as-head"><h3>答辩追问</h3><span class="mini" id="asQCount">0 个问题</span></div>
+          <div id="asQuestions"></div>
+        </div>
+        <div class="as-card">
+          <div class="as-head"><h3>研究待办</h3><span class="spacer"></span><span class="mini" id="asTodoCount">0 项</span></div>
+          <div class="as-todo-add"><input id="asTodoInput" placeholder="添加一条待办，例如：补访谈 5 位项目负责人"><button class="btn sm" id="btnAsTodoAdd">添加</button></div>
+          <div class="cc-act" style="margin:6px 0 8px">
+            <button class="btn sm" id="btnAsTodoGap">从方案缺口生成</button>
+            <button class="btn sm" id="btnAsTodoAudit">从审计未决项生成</button>
+          </div>
+          <div id="asTodos"></div>
+        </div>
+      </div>
+      <aside class="as-side">
+        <div class="as-card">
+          <div class="as-head"><h3>方法迁移候选</h3><span class="mini">仅库内</span></div>
+          <div id="asTransfers"></div>
+          <div class="rnote">只从当前方案与库内观点的方法记录中提取；不检索外部学科，也不承诺方法可迁移。</div>
+        </div>
+        <div class="as-card">
+          <div class="as-head"><h3>文献可信度状态</h3><span class="mini">未核验</span></div>
+          <div id="asCredibility"></div>
+          <div class="rnote">平台未接 DOI / 撤稿数据库，不能给出可信度分数。这里只显示“未核验”，并提供 Crossref 搜索入口，由你人工核对。</div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
 <!-- 对比抽屉 -->
 <div class="mask" id="mask"></div>
 <div class="drawer" id="drawer">
@@ -1032,6 +1116,7 @@
 <script src="reader.js"></script>
 <script src="research.js"></script>
 <script src="design.js"></script>
+<script src="assistant.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
